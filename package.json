@@ -1,0 +1,60 @@
+{
+  "name": "@astefanski/storm-parser",
+  "version": "0.0.12",
+  "description": "Storm Parser is a tool for parsing Heroes of the Storm replays.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "scripts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/astefanski1/storm-parser.git"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "build": "tsup",
+    "postinstall": "tsx scripts/postinstall.ts",
+    "generate:protocols": "tsx scripts/postinstall.ts"
+  },
+  "keywords": [],
+  "author": {
+    "name": "Aleksander Stefański"
+  },
+  "license": "ISC",
+  "packageManager": "pnpm@10.28.2",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.3.0",
+    "eslint": "^10.0.1",
+    "globals": "^17.3.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.0",
+    "vitest": "^4.0.18"
+  },
+  "dependencies": {
+    "seek-bzip": "^2.0.0",
+    "tsx": "^4.21.0"
+  }
+}
