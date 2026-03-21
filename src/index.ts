@@ -1,4 +1,5 @@
 export { ReplayParser } from "./ReplayParser.js";
+export { LiveStreamParser } from "./LiveStreamParser.js";
 export type { Protocol, ReplayEvent } from "./ReplayParser.js";
 export { ReplayAnalyzer } from "./ReplayAnalyzer.js";
 export type {

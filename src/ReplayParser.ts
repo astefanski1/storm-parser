@@ -35,14 +35,16 @@ export interface ReplayEvent {
 }
 
 export class ReplayParser {
-  private mpq: MpqReader;
-  private header: RawHeader | undefined;
-  private build: number = 0;
-  private protocol?: Protocol;
-  private baseProtocol?: Protocol;
+  protected mpq!: MpqReader;
+  protected header: RawHeader | undefined;
+  protected build: number = 0;
+  protected protocol?: Protocol;
+  protected baseProtocol?: Protocol;
 
-  constructor(filenameOrData: string | Buffer) {
-    this.mpq = new MpqReader(filenameOrData, false);
+  constructor(filenameOrData?: string | Buffer) {
+    if (filenameOrData) {
+      this.mpq = new MpqReader(filenameOrData, false);
+    }
   }
 
   public init(): void {
@@ -74,7 +76,7 @@ export class ReplayParser {
     this.protocol = this.loadProtocolForBuild(this.build);
   }
 
-  private loadProtocolForBuild(build: number): Protocol {
+  protected loadProtocolForBuild(build: number): Protocol {
     let protocol = loadProtocol(build);
     if (!protocol) {
       // Find closest available build that is <= the requested build
@@ -93,7 +95,7 @@ export class ReplayParser {
     return protocol;
   }
 
-  private *decodeEventStream(
+  protected *decodeEventStream(
     decoder: BitPackedDecoder | VersionedDecoder,
     eventidTypeid: number,
     eventTypes: Record<number, [number, string]>,
