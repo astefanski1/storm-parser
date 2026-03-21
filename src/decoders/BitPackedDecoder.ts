@@ -1,6 +1,6 @@
 import { BitPackedBuffer, CorruptedError } from "./BitPackedBuffer";
 
-import type { TypeInfo } from "../ReplayParser.js";
+import type { TypeInfo } from "../ReplayParser";
 
 export type DecodedData =
   | string

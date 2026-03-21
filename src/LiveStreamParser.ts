@@ -1,10 +1,11 @@
 import {
   BitPackedDecoder,
+  DecodedData,
   VersionedDecoder,
-} from "./decoders/BitPackedDecoder.js";
-import { getAvailableBuilds } from "./protocols/map.js";
-import type { ReplayEvent } from "./ReplayParser.js";
-import { ReplayParser } from "./ReplayParser.js";
+} from "./decoders/BitPackedDecoder";
+import { getAvailableBuilds } from "./protocols/map";
+import type { ReplayEvent } from "./ReplayParser";
+import { ReplayParser } from "./ReplayParser";
 
 export class LiveStreamParser extends ReplayParser {
   constructor(build?: number) {
@@ -53,6 +54,16 @@ export class LiveStreamParser extends ReplayParser {
       // Buffer was truncated or invalid
       console.error("[LiveStreamParser] Failed to parse game events", e);
       return [];
+    }
+  }
+  public parseDetails(buffer: Buffer): DecodedData | null {
+    if (!this.protocol) return null;
+    try {
+      const decoder = new VersionedDecoder(buffer, this.protocol.typeinfos);
+      return decoder.instance(this.protocol.game_details_typeid);
+    } catch (e: unknown) {
+      console.error("[LiveStreamParser] Failed to parse details", e);
+      return null;
     }
   }
 }
