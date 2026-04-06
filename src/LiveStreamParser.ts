@@ -1,10 +1,10 @@
 import {
   BitPackedDecoder,
-  DecodedData,
   VersionedDecoder,
-} from "./decoders/BitPackedDecoder";
-import { getAvailableBuilds } from "./protocols/map";
-import type { ReplayEvent } from "./ReplayParser";
+} from "./decoders/BitPackedDecoder.js";
+import { getAvailableBuilds } from "./protocols/map.js";
+import type { RawDetails, RawInitData } from "./types/index.js";
+import type { ReplayEvent } from "./ReplayParser.js";
 import { ReplayParser } from "./ReplayParser";
 
 export class LiveStreamParser extends ReplayParser {
@@ -56,13 +56,28 @@ export class LiveStreamParser extends ReplayParser {
       return [];
     }
   }
-  public parseDetails(buffer: Buffer): DecodedData | null {
+  public parseDetails(buffer: Buffer): RawDetails | null {
     if (!this.protocol) return null;
     try {
       const decoder = new VersionedDecoder(buffer, this.protocol.typeinfos);
-      return decoder.instance(this.protocol.game_details_typeid);
+      return decoder.instance(
+        this.protocol.game_details_typeid,
+      ) as unknown as RawDetails;
     } catch (e: unknown) {
       console.error("[LiveStreamParser] Failed to parse details", e);
+      return null;
+    }
+  }
+
+  public parseInitData(buffer: Buffer): RawInitData | null {
+    if (!this.protocol) return null;
+    try {
+      const decoder = new BitPackedDecoder(buffer, this.protocol.typeinfos);
+      return decoder.instance(
+        this.protocol.replay_initdata_typeid,
+      ) as unknown as RawInitData;
+    } catch (e: unknown) {
+      console.error("[LiveStreamParser] Failed to parse initData", e);
       return null;
     }
   }

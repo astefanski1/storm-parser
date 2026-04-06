@@ -153,7 +153,7 @@ export function processTrackerEvents(
         break;
 
       case "NNet.Replay.Tracker.SUnitBornEvent":
-        processUnitBorn(event, state, match);
+        processUnitBorn(event, state, match, players);
         break;
       case "NNet.Replay.Tracker.SUnitDiedEvent":
         processUnitDied(event, state, match);
@@ -433,6 +433,7 @@ function processUnitBorn(
   event: ReplayEvent,
   state: TrackerState,
   match: MatchStat,
+  players: Record<string, PlayerStat>,
 ): void {
   const unitType = bufStr(event.m_unitTypeName);
   const tagIdx = event.m_unitTagIndex as number;
@@ -473,6 +474,17 @@ function processUnitBorn(
 
   if (unitType.startsWith("Hero") && playerId >= 1 && playerId <= 10) {
     state.heroUnits[key] = playerId;
+    
+    // Fallback: If this player has no hero name assigned, recover it from the unit type
+    const toonHandle = state.playerIDMap[playerId];
+    if (toonHandle && players[toonHandle] && (!players[toonHandle].hero || players[toonHandle].hero === "")) {
+      const recoveredHero = normalizeHeroName(unitType);
+      if (recoveredHero) {
+        players[toonHandle].hero = recoveredHero;
+        match.heroes[playerId - 1] = recoveredHero; // Also update match-level list
+      }
+    }
+
     if (!state.heroLives[playerId]) state.heroLives[playerId] = [];
     const bornTime = loopToTime(event._gameloop, state.loopGameStart);
     state.heroLives[playerId].push({

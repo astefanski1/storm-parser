@@ -117,8 +117,17 @@ export function normalizeHeroName(rawName: string): string | null {
   if (validHeroes.includes(rawName)) return rawName;
   // Check mapped
   if (heroNameMap[rawName]) return heroNameMap[rawName];
+
   // Strip non-alphas and check case insensitive
   const clean = rawName.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+
+  // Try stripping "hero" prefix from internal names (e.g. HeroAbathur)
+  if (clean.startsWith("hero") && clean.length > 4) {
+    const stripped = clean.substring(4);
+    const matched = validHeroes.find((h) => h.toLowerCase() === stripped);
+    if (matched) return matched;
+  }
+
   const matched = validHeroes.find((h) => h.toLowerCase() === clean);
   if (matched) return matched;
 

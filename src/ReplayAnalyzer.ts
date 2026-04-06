@@ -134,7 +134,7 @@ export class ReplayAnalyzer {
       this.extractDraft(initData, match, details);
 
       // ── 4b. Extract cosmetics (skin, mount, announcer) from initData ──
-      this.extractCosmetics(initData, details, players);
+      this.extractCosmetics(initData, details, players, match);
 
       // ── 5. Process all tracker events ──
       const { playerIDMap } = processTrackerEvents(
@@ -347,6 +347,7 @@ export class ReplayAnalyzer {
     initData: RawInitData | null,
     details: RawDetails,
     players: Record<string, PlayerStat>,
+    match: MatchStat,
   ): void {
     if (!initData) return;
     try {
@@ -382,6 +383,17 @@ export class ReplayAnalyzer {
           }
 
           if (player) {
+            // Fallback: If hero is missing from details, extract it from the slot!
+            if (!player.hero || player.hero === "") {
+              const recoveredHero = normalizeHeroName(bufStr(slotHero));
+              if (recoveredHero) {
+                player.hero = recoveredHero;
+                // Also update match-level list if possible (O(N) search)
+                const heroIdx = match.heroes.indexOf("");
+                if (heroIdx !== -1) match.heroes[heroIdx] = recoveredHero;
+              }
+            }
+
             player.skin = bufStr(slot.m_skin) || "";
             player.mount = bufStr(slot.m_mount) || "";
             player.announcer = bufStr(slot.m_announcerPack) || "";

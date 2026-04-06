@@ -1,7 +1,12 @@
-export { ReplayParser } from "./ReplayParser.js";
-export { LiveStreamParser } from "./LiveStreamParser.js";
-export type { Protocol, ReplayEvent } from "./ReplayParser.js";
-export { ReplayAnalyzer } from "./ReplayAnalyzer.js";
+export { ReplayParser } from "./ReplayParser";
+export { LiveStreamParser } from "./LiveStreamParser";
+export type { Protocol, ReplayEvent } from "./ReplayParser";
+export { ReplayAnalyzer } from "./ReplayAnalyzer";
+export {
+  VersionedDecoder,
+  BitPackedDecoder,
+} from "./decoders/BitPackedDecoder";
+export { loadProtocol, getAvailableBuilds } from "./protocols/map";
 export type {
   AnalysisResult,
   MatchStat,
@@ -32,4 +37,6 @@ export type {
   UnitPosition,
   UnitLife,
   PlayerUnit,
-} from "./types/index.js";
+  RawDetails,
+  RawInitData,
+} from "./types";
