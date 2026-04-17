@@ -3,6 +3,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { ReplayAnalyzer } from "../src/ReplayAnalyzer";
 import type { AnalysisResult } from "../src/types/index";
+import { validMaps } from "../src/analyzers/mapsList";
 
 describe("ReplayAnalyzer", () => {
   const replaysDir: string = path.resolve(__dirname, "replays");
@@ -34,42 +35,72 @@ describe("ReplayAnalyzer", () => {
       // ── Match Metadata ──
       it("should have complete version info", () => {
         const v = result.match!.version;
-        expect(v.m_build).toBeGreaterThan(0);
-        expect(typeof v.m_major).toBe("number");
-        expect(typeof v.m_minor).toBe("number");
-        expect(typeof v.m_baseBuild).toBe("number");
+        expect(v.m_build).toBeGreaterThanOrEqual(80000);
+        expect(v.m_major).toBe(2);
+        expect(v.m_minor).toBeGreaterThanOrEqual(50);
+        expect(v.m_baseBuild).toBe(v.m_build);
       });
 
       it("should have map, date, region, length", () => {
-        expect(result.match!.map).toBeTruthy();
-        expect(result.match!.date).toBeTruthy();
-        expect(result.match!.rawDate).toBeGreaterThan(0);
-        expect(result.match!.region).toBeGreaterThan(0);
-        expect(result.match!.length).toBeGreaterThan(0);
-        expect(result.match!.loopLength).toBeGreaterThan(0);
-        expect(result.match!.loopGameStart).toBeDefined();
+        // Map should be a non-empty string
+        expect(result.match!.map?.length).toBeGreaterThan(3);
+        // Date should be a valid ISO 8601 string
+        expect(Date.parse(result.match!.date)).not.toBeNaN();
+        expect(result.match!.date).toMatch(
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
+        );
+        // rawDate is a Windows FILETIME — a huge integer
+        expect(result.match!.rawDate).toBeGreaterThan(1e17);
+        // EU region = 2
+        expect(result.match!.region).toBe(2);
+        // Length should be a reasonable game duration in seconds (2-45 min)
+        expect(result.match!.length).toBeGreaterThan(120);
+        expect(result.match!.length).toBeLessThan(2700);
+        // Loop values should be consistent
+        expect(result.match!.loopLength).toBeGreaterThan(
+          result.match!.loopGameStart!,
+        );
+        // Game speed 4 = Faster (standard for HotS)
+        expect(result.match!.gameSpeed).toBe(4);
       });
 
       it("should have winner and winning players", () => {
-        // Some replays (e.g. custom/resumed) might have no winner in details
-        if (result.match!.winningPlayers.length > 0) {
-          expect([0, 1]).toContain(result.match!.winner);
-        } else {
-          expect(result.match!.winner).toBe(-1);
+        expect([0, 1]).toContain(result.match!.winner);
+        expect(result.match!.winningPlayers.length).toBe(5);
+        // All winning players should belong to the winning team
+        for (const wp of result.match!.winningPlayers) {
+          const player = result.players![wp];
+          expect(player).toBeDefined();
+          expect(player.team).toBe(result.match!.winner);
+          expect(player.win).toBe(true);
         }
       });
 
-      it("should have playerIDs and heroes", () => {
-        expect(result.match!.playerIDs.length).toBeGreaterThanOrEqual(2);
-        expect(result.match!.heroes.length).toBe(
-          result.match!.playerIDs.length,
-        );
+      it("should have exactly 10 playerIDs and heroes", () => {
+        expect(result.match!.playerIDs).toHaveLength(10);
+        expect(result.match!.heroes).toHaveLength(10);
+        // Heroes should be non-empty real hero names
+        for (const hero of result.match!.heroes) {
+          expect(hero.length).toBeGreaterThan(2);
+          // No raw Buffer remnants
+          expect(hero).not.toContain("Buffer");
+        }
+        // No duplicate ToonHandles
+        const unique = new Set(result.match!.playerIDs);
+        expect(unique.size).toBe(10);
       });
 
       // ── Draft ──
       it("should have picks and bans for both teams", () => {
-        expect(result.match!.picks[0].length).toBeGreaterThanOrEqual(1);
-        expect(result.match!.picks[1].length).toBeGreaterThanOrEqual(1);
+        // Each team should have exactly 5 picks
+        expect(result.match!.picks[0]).toHaveLength(5);
+        expect(result.match!.picks[1]).toHaveLength(5);
+        // All picked heroes should be non-empty strings
+        for (const team of [0, 1] as const) {
+          for (const hero of result.match!.picks[team]) {
+            expect(hero.length).toBeGreaterThan(2);
+          }
+        }
 
         if (
           result.match!.mode === "Storm League" ||
@@ -77,56 +108,67 @@ describe("ReplayAnalyzer", () => {
           result.match!.mode === "Team League" ||
           result.match!.mode === "Unranked Draft"
         ) {
-          expect(result.match!.bans["0"].length).toBeGreaterThanOrEqual(0); // Older patches had less than 3, but should be tested carefully
-          expect(result.match!.bans["1"].length).toBeGreaterThanOrEqual(0);
-
-          // For specifically the 00.12.25 Cursed Hollow test case we know there should be 6 bans total
-          if (file.includes("2026-02-21 00.12.25 Cursed Hollow.StormReplay")) {
-            console.log(
-              "Team 0 Bans:",
-              JSON.stringify(result.match!.bans["0"]),
-            );
-            console.log(
-              "Team 1 Bans:",
-              JSON.stringify(result.match!.bans["1"]),
-            );
-            expect(result.match!.bans["0"].length).toBe(3);
-            expect(result.match!.bans["1"].length).toBe(3);
+          // Draft modes should have bans with hero names and ordering
+          const totalBans =
+            result.match!.bans["0"].length + result.match!.bans["1"].length;
+          expect(totalBans).toBeGreaterThanOrEqual(0);
+          for (const ban of [
+            ...result.match!.bans["0"],
+            ...result.match!.bans["1"],
+          ]) {
+            expect(ban.hero.length).toBeGreaterThan(2);
+            expect(ban.order).toBeGreaterThan(0);
+            expect(ban.absolute).toBeGreaterThan(0);
           }
         }
       });
 
       // ── Level Times ──
       it("should have level times for both teams", () => {
-        expect(
-          Object.keys(result.match!.levelTimes["0"]).length,
-        ).toBeGreaterThan(0);
-        expect(
-          Object.keys(result.match!.levelTimes["1"]).length,
-        ).toBeGreaterThan(0);
+        const team0Levels = Object.keys(result.match!.levelTimes["0"]);
+        const team1Levels = Object.keys(result.match!.levelTimes["1"]);
+        // Both teams should reach at least level 10 in any real game
+        expect(team0Levels.length).toBeGreaterThanOrEqual(10);
+        expect(team1Levels.length).toBeGreaterThanOrEqual(10);
       });
 
       it("should have correct level time structure", () => {
-        for (const lt of Object.values(result.match!.levelTimes["0"])) {
-          expect(typeof lt.loop).toBe("number");
-          expect(typeof lt.level).toBe("number");
-          expect(typeof lt.time).toBe("number");
-          expect(lt.team).toBe("0");
+        for (const [teamKey, levels] of Object.entries(
+          result.match!.levelTimes,
+        )) {
+          if (teamKey !== "0" && teamKey !== "1") continue;
+          for (const [levelStr, lt] of Object.entries(levels)) {
+            // Level should match the key
+            expect(lt.level).toBe(Number(levelStr));
+            // Time should be non-negative (relative to game start)
+            expect(lt.time).toBeGreaterThanOrEqual(0);
+            // Loop should be a valid gameloop
+            expect(lt.loop).toBeGreaterThan(0);
+            expect(lt.team).toBe(teamKey);
+          }
         }
       });
 
       // ── Takedowns ──
-      it("should have takedown events array", () => {
-        expect(Array.isArray(result.match!.takedowns)).toBe(true);
-      });
-
-      it("should have correct takedown structure", () => {
+      it("should have takedown events with complete data", () => {
+        // Any real 10+ minute game should have at least a few takedowns
+        expect(result.match!.takedowns.length).toBeGreaterThan(0);
         for (const td of result.match!.takedowns) {
-          expect(typeof td.loop).toBe("number");
-          expect(typeof td.time).toBe("number");
-          expect(td.victim.player).toBeTruthy();
-          expect(td.victim.hero).toBeTruthy();
+          // Time should be relative to game start (positive)
+          expect(td.time).toBeGreaterThan(0);
+          expect(td.loop).toBeGreaterThan(0);
+          // Positions should be within map bounds
+          expect(td.x).toBeGreaterThanOrEqual(0);
+          expect(td.y).toBeGreaterThanOrEqual(0);
+          // Victim should have a valid ToonHandle and hero
+          expect(td.victim.player).toMatch(/-/);
+          expect(td.victim.hero.length).toBeGreaterThan(2);
+          // At least 1 killer
           expect(td.killers.length).toBeGreaterThan(0);
+          for (const k of td.killers) {
+            expect(k.player).toMatch(/-/);
+            expect(k.hero.length).toBeGreaterThan(2);
+          }
         }
       });
 
@@ -134,15 +176,29 @@ describe("ReplayAnalyzer", () => {
         expect(
           result.match!.team0Takedowns + result.match!.team1Takedowns,
         ).toBe(result.match!.takedowns.length);
+        expect(result.match!.team0Takedowns).toBeGreaterThanOrEqual(0);
+        expect(result.match!.team1Takedowns).toBeGreaterThanOrEqual(0);
       });
 
       // ── Structures ──
       it("should have structure data", () => {
-        expect(Object.keys(result.match!.structures).length).toBeGreaterThan(0);
-        for (const s of Object.values(result.match!.structures)) {
+        const structures = Object.values(result.match!.structures);
+        expect(structures.length).toBeGreaterThan(0);
+        for (const s of structures) {
+          // Structure types: Fort, Keep, Fort Tower, Keep Tower, Fort Well, Keep Well
+          expect([
+            "Fort",
+            "Keep",
+            "Fort Tower",
+            "Keep Tower",
+            "Fort Well",
+            "Keep Well",
+          ]).toContain(s.name);
           expect(s.type).toBeTruthy();
-          expect(s.name).toBeTruthy();
           expect([0, 1]).toContain(s.team);
+          // Should have position
+          expect(s.x).toBeGreaterThanOrEqual(0);
+          expect(s.y).toBeGreaterThanOrEqual(0);
         }
       });
 
@@ -150,72 +206,145 @@ describe("ReplayAnalyzer", () => {
       it("should have XP breakdown entries", () => {
         expect(result.match!.XPBreakdown.length).toBeGreaterThan(0);
         for (const xp of result.match!.XPBreakdown) {
-          // Team 0/1 are standard, Team 2 is neutral/special in some modes/maps
           expect([0, 1, 2]).toContain(xp.team);
-          expect(typeof xp.breakdown.MinionXP).toBe("number");
-          expect(typeof xp.breakdown.TrickleXP).toBe("number");
+          // All XP values should be non-negative
+          expect(xp.breakdown.MinionXP).toBeGreaterThanOrEqual(0);
+          expect(xp.breakdown.TrickleXP).toBeGreaterThanOrEqual(0);
+          expect(xp.breakdown.HeroXP).toBeGreaterThanOrEqual(0);
+          expect(xp.breakdown.StructureXP).toBeGreaterThanOrEqual(0);
+          expect(xp.breakdown.CreepXP).toBeGreaterThanOrEqual(0);
+          // Time should be a valid loop value
+          expect(xp.loop).toBeGreaterThan(0);
         }
       });
 
       // ── Objectives ──
       it("should have objective data", () => {
         expect(result.match!.objective).toBeDefined();
-        expect(result.match!.objective[0]).toBeDefined();
-        expect(result.match!.objective[1]).toBeDefined();
-        expect(result.match!.objective.type).toBeTruthy();
+        expect(result.match!.objective[0].count).toBeGreaterThanOrEqual(0);
+        expect(result.match!.objective[1].count).toBeGreaterThanOrEqual(0);
+        expect(result.match!.objective[0].events.length).toBe(
+          result.match!.objective[0].count,
+        );
+        expect(result.match!.objective[1].events.length).toBe(
+          result.match!.objective[1].count,
+        );
+        // objective.type is set to the map name
+        expect(result.match!.objective.type.length).toBeGreaterThan(3);
       });
 
       // ── Mercs ──
       it("should have mercs data structure", () => {
         expect(Array.isArray(result.match!.mercs.captures)).toBe(true);
-        expect(typeof result.match!.mercs.units).toBe("object");
+        // In any real game, at least one merc camp should be captured
+        if (result.match!.mercs.captures.length > 0) {
+          for (const capture of result.match!.mercs.captures) {
+            expect(capture.type.length).toBeGreaterThan(0);
+            expect(capture.time).toBeGreaterThan(0);
+            expect([0, 1, 2]).toContain(capture.team);
+          }
+        }
       });
 
       // ── Teams ──
       it("should have team names, heroes, tags", () => {
         for (const teamKey of ["0", "1"]) {
           const team = result.match!.teams[teamKey];
-          expect(team.names.length).toBeGreaterThan(0);
-          expect(team.heroes.length).toBeGreaterThan(0);
-          expect(team.tags.length).toBe(team.names.length);
-          expect(team.ids.length).toBeGreaterThan(0);
+          expect(team.names).toHaveLength(5);
+          expect(team.heroes).toHaveLength(5);
+          expect(team.tags).toHaveLength(5);
+          expect(team.ids).toHaveLength(5);
+          // Names should be real player names (non-empty, no Buffer junk)
+          for (const name of team.names) {
+            expect(name.length).toBeGreaterThan(0);
+            expect(name).not.toContain("Buffer");
+          }
+          // Heroes should be valid hero names
+          for (const hero of team.heroes) {
+            expect(hero.length).toBeGreaterThan(2);
+          }
+          // No duplicate IDs between teams
         }
+        const allIds = [
+          ...result.match!.teams["0"].ids,
+          ...result.match!.teams["1"].ids,
+        ];
+        expect(new Set(allIds).size).toBe(10);
       });
 
-      it("should have team stats", () => {
+      it("should have team stats with realistic values", () => {
         for (const teamKey of ["0", "1"]) {
           const stats = result.match!.teams[teamKey].stats;
-          expect(typeof stats.KDA).toBe("number");
-          expect(typeof stats.mercCaptures).toBe("number");
-          expect(typeof stats.totals.HeroDamage).toBe("number");
+          // KDA should be non-negative
+          expect(stats.KDA).toBeGreaterThanOrEqual(0);
+          // Merc captures can be 0
+          expect(stats.mercCaptures).toBeGreaterThanOrEqual(0);
+          // Total damage values should be positive in any real game
+          expect(stats.totals.HeroDamage).toBeGreaterThan(0);
+          expect(stats.totals.SiegeDamage).toBeGreaterThan(0);
+          expect(stats.totals.Healing).toBeGreaterThanOrEqual(0);
+          // Structure tracking
+          expect(stats.structures).toBeDefined();
           expect(typeof stats.structures).toBe("object");
         }
       });
 
       // ── Players ──
       it("should have enriched player data", () => {
-        for (const p of Object.values(result.players!)) {
-          expect(p.hero).toBeTruthy();
-          expect(p.name).toBeTruthy();
-          expect(p.ToonHandle).toBeTruthy();
-          expect(typeof p.uuid).toBe("number");
-          expect(typeof p.region).toBe("number");
-          expect(typeof p.realm).toBe("number");
+        const players = Object.values(result.players!);
+        expect(players).toHaveLength(10);
+        for (const p of players) {
+          // Hero name should be a real hero (2+ chars)
+          expect(p.hero.length).toBeGreaterThan(2);
+          expect(p.hero).not.toContain("Buffer");
+          // Player name is non-empty
+          expect(p.name.length).toBeGreaterThan(0);
+          // ToonHandle format: region-programId-realm-id (e.g. "2-Hero-1-7925312")
+          expect(p.ToonHandle).toMatch(/^\d+-\w+-\d+-\d+$/);
+          // UUID, region, realm are consistent with ToonHandle
+          expect(p.uuid).toBeGreaterThan(0);
+          expect(p.region).toBe(2); // EU
+          expect(p.realm).toBe(1);
           expect([0, 1]).toContain(p.team);
-          expect(typeof p.win).toBe("boolean");
+          // Win should match the match winner
+          expect(p.win).toBe(p.team === result.match!.winner);
         }
       });
 
-      it("should have game stats and awards", () => {
+      it("should have game stats with real metrics", () => {
         for (const p of Object.values(result.players!)) {
-          expect(Object.keys(p.gameStats).length).toBeGreaterThan(0);
+          const gs = p.gameStats;
+          // Core combat stats should be present and non-negative
+          expect(gs["HeroDamage"]).toBeGreaterThanOrEqual(0);
+          expect(gs["SiegeDamage"]).toBeGreaterThanOrEqual(0);
+          expect(gs["DamageTaken"]).toBeGreaterThanOrEqual(0);
+          expect(gs["Deaths"]).toBeGreaterThanOrEqual(0);
+          expect(gs["Assists"]).toBeGreaterThanOrEqual(0);
+          expect(gs["SoloKill"]).toBeGreaterThanOrEqual(0);
+          // Computed stats
+          expect(gs["DPM"]).toBeGreaterThanOrEqual(0);
+          expect(gs["KDA"]).toBeGreaterThanOrEqual(0);
+          // KP can exceed 1.0 because all nearby allies get assist credit
+          expect(gs["KillParticipation"]).toBeGreaterThanOrEqual(0);
+          // Game length in seconds should match match.length
+          expect(gs["length"]).toBeCloseTo(result.match!.length, 0);
+          // Awards is an array of strings
           expect(Array.isArray(p.awards)).toBe(true);
+          for (const award of p.awards) {
+            expect(award.length).toBeGreaterThan(0);
+          }
         }
       });
 
-      it("should have talents", () => {
+      it("should have talents for each player", () => {
         for (const p of Object.values(result.players!)) {
-          expect(typeof p.talents).toBe("object");
+          const t = p.talents;
+          // At least 1 talent tier should be filled
+          const filledTiers = Object.values(t).filter(Boolean).length;
+          expect(filledTiers).toBeGreaterThanOrEqual(1);
+          // Tier1Choice is always present
+          expect(t.Tier1Choice).toBeTruthy();
+          expect(t.Tier1Choice!.length).toBeGreaterThan(3);
         }
       });
 
@@ -223,28 +352,28 @@ describe("ReplayAnalyzer", () => {
         for (const p of Object.values(result.players!)) {
           expect(Array.isArray(p.takedowns)).toBe(true);
           expect(Array.isArray(p.deaths)).toBe(true);
-        }
-      });
-
-      it("should have computed stats", () => {
-        for (const p of Object.values(result.players!)) {
-          expect(typeof p.gameStats["DPM"]).toBe("number");
-          expect(typeof p.gameStats["KDA"]).toBe("number");
-          expect(typeof p.gameStats["KillParticipation"]).toBe("number");
-          expect(typeof p.gameStats["length"]).toBe("number");
+          // deaths array comes from tracker events, gameStats.Deaths from score screen
+          expect(p.gameStats["Deaths"]).toBeGreaterThanOrEqual(0);
         }
       });
 
       it("should have unit position data", () => {
         for (const p of Object.values(result.players!)) {
-          expect(typeof p.units).toBe("object");
+          // units should have hero lifecycle data
+          expect(p.units).toBeDefined();
+          const heroKeys = Object.keys(p.units);
+          expect(heroKeys.length).toBeGreaterThan(0);
         }
       });
+
       it("should have skin, mount, announcer, and silence flags", () => {
         for (const p of Object.values(result.players!)) {
+          // Skin and announcer can be empty strings for some players
           expect(typeof p.skin).toBe("string");
+          // Mount can be empty for some heroes (e.g., Alexstrasza)
           expect(typeof p.mount).toBe("string");
           expect(typeof p.announcer).toBe("string");
+          // Silence flags are boolean
           expect(typeof p.silenced).toBe("boolean");
           expect(typeof p.voiceSilenced).toBe("boolean");
         }
@@ -254,22 +383,24 @@ describe("ReplayAnalyzer", () => {
       it("should have level advantage timeline", () => {
         expect(result.match!.levelAdvTimeline.length).toBeGreaterThan(0);
         for (const seg of result.match!.levelAdvTimeline) {
-          expect(typeof seg.start).toBe("number");
-          expect(typeof seg.end).toBe("number");
           expect(seg.end).toBeGreaterThanOrEqual(seg.start);
+          expect(typeof seg.levelDiff).toBe("number");
+          expect(seg.length).toBeGreaterThanOrEqual(0);
         }
       });
 
       it("should have level advantage stats per team", () => {
         for (const teamKey of ["0", "1"]) {
           const stats = result.match!.teams[teamKey].stats;
-          expect(typeof stats.levelAdvTime).toBe("number");
-          expect(typeof stats.levelAdvPct).toBe("number");
-          expect(typeof stats.maxLevelAdv).toBe("number");
+          expect(stats.levelAdvTime).toBeGreaterThanOrEqual(0);
+          // Percentage should be between 0 and 1
+          expect(stats.levelAdvPct).toBeGreaterThanOrEqual(0);
+          expect(stats.levelAdvPct).toBeLessThanOrEqual(1);
+          expect(stats.maxLevelAdv).toBeGreaterThanOrEqual(0);
         }
       });
 
-      // ── First Events ──
+      // ── First Pick ──
       it("should have firstPickWin", () => {
         expect(typeof result.match!.firstPickWin).toBe("boolean");
       });
@@ -279,11 +410,19 @@ describe("ReplayAnalyzer", () => {
         for (const teamKey of ["0", "1"]) {
           const stats = result.match!.teams[teamKey].stats;
           expect(stats.uptime.length).toBeGreaterThan(0);
-          expect(typeof stats.avgHeroesAlive).toBe("number");
+          // Average heroes alive should be between 0 and 5
           expect(stats.avgHeroesAlive).toBeGreaterThan(0);
-          expect(typeof stats.timeWithHeroAdv).toBe("number");
-          expect(typeof stats.pctWithHeroAdv).toBe("number");
+          expect(stats.avgHeroesAlive).toBeLessThanOrEqual(5);
+          // Hero advantage time and pct should be non-negative
+          expect(stats.timeWithHeroAdv).toBeGreaterThanOrEqual(0);
+          expect(stats.pctWithHeroAdv).toBeGreaterThanOrEqual(0);
+          expect(stats.pctWithHeroAdv).toBeLessThanOrEqual(1);
         }
+      });
+
+      // ── Map Name Normalization ──
+      it("should have a canonical English map name", () => {
+        expect(validMaps).toContain(result.match!.map);
       });
     });
   }

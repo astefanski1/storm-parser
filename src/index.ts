@@ -7,6 +7,8 @@ export {
   BitPackedDecoder,
 } from "./decoders/BitPackedDecoder";
 export { loadProtocol, getAvailableBuilds } from "./protocols/map";
+export { normalizeMapName } from "./analyzers/mapsList";
+export type { MapName } from "./analyzers/mapsList";
 export type {
   AnalysisResult,
   MatchStat,
