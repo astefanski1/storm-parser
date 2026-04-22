@@ -234,23 +234,27 @@ export class ReplayAnalyzer {
       const btagRegExp = new RegExp("([\\p{L}\\d]{3,24}#\\d{4,10})[zØ]?", "gu");
       const matches = battleLobbyBuf.toString("utf8").match(btagRegExp);
       if (!matches) return;
-      let matchIndex = 0;
       for (const pdata of details.m_playerList) {
         if (!pdata?.m_toon) continue;
         const name = bufStr(pdata.m_name);
-        while (matchIndex < matches.length) {
-          const m = matches[matchIndex];
+
+        // Find the BattleTag in the matches array (independent of current index)
+        const foundIndex = matches.findIndex((m) => {
           const parts = m.split("#");
-          const mName = parts[0];
+          return parts[0] === name;
+        });
+
+        if (foundIndex !== -1) {
+          const m = matches[foundIndex];
+          // Remove to avoid double-matching if multiple players have the same name (rare but safer)
+          matches.splice(foundIndex, 1);
+
+          const parts = m.split("#");
           const mTag = parts[1].replace(/[zØ]/g, "");
-          matchIndex++;
-          if (mName === name) {
-            const toon = pdata.m_toon;
-            const toonHandle = `${toon.m_region}-${bufStr(toon.m_programId)}-${toon.m_realm}-${toon.m_id}`;
-            if (players[toonHandle]) {
-              players[toonHandle].tag = parseInt(mTag, 10) || 0;
-            }
-            break;
+          const toon = pdata.m_toon;
+          const toonHandle = `${toon.m_region}-${bufStr(toon.m_programId)}-${toon.m_realm}-${toon.m_id}`;
+          if (players[toonHandle]) {
+            players[toonHandle].tag = parseInt(mTag, 10) || 0;
           }
         }
       }
