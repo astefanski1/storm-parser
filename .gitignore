@@ -1,3 +1,5 @@
 node_modules
-protocols
+/protocols
 dist
+# Internal docs
+/docs/
