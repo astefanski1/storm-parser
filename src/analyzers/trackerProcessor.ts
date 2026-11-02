@@ -10,6 +10,7 @@ import type {
   MatchStat,
 } from "../types/index.js";
 import { normalizeHeroName } from "./heroesList.js";
+import { normalizeMapName } from "./mapsList.js";
 
 // ── Structure name mapping ──────────────────────────────────────────────────
 const STRUCTURE_NAMES: Record<string, string> = {
@@ -45,6 +46,8 @@ interface TrackerState {
   >;
   heroUnits: Record<string, number>;
   heroLives: Record<number, UnitLife[]>;
+  /** Language-independent map id from `EndOfGameTalentChoices` ("DragonShire"). */
+  mapId?: string;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -163,6 +166,11 @@ export function processTrackerEvents(
         break;
     }
   }
+
+  // m_title is localized and m_mapFileName is empty in real replays, so the
+  // canonical name comes from the end-of-game `Map` id when present.
+  match.map = normalizeMapName(match.map || "", state.mapId);
+  match.objective.type = match.map;
 
   match.loopGameStart = state.loopGameStart;
   match.loopLength = state.loopGameEnd;
@@ -360,6 +368,8 @@ function processStatGameEvent(
     case "EndOfGameTalentChoices": {
       const playerId = getIntVal(intData, "PlayerID");
       if (playerId === undefined) break;
+      const mapId = getStrVal(stringData, "Map");
+      if (mapId) state.mapId = mapId;
       const toonHandle = state.playerIDMap[playerId];
       if (!toonHandle || !players[toonHandle]) break;
       const tc: TalentChoices = {};

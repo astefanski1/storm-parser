@@ -25,10 +25,11 @@ export const validMaps = [
 
 export type MapName = (typeof validMaps)[number];
 
-// ── Internal m_mapFileName → Canonical Name ─────────────────────────────────
-// m_mapFileName contains the internal .StormMap file identifier which is
-// always the same regardless of the client language. This is the most reliable
-// way to identify a map.
+// ── Internal map id → Canonical Name ────────────────────────────────────────
+// Language-independent map identifiers: the `Map` value of the
+// `EndOfGameTalentChoices` tracker event ("DragonShire", "Crypts", …) or a
+// m_mapFileName path (empty in real replays). The client language never
+// changes them, unlike the localized m_title.
 //
 // Keys are normalised to lowercase with path segments and extensions stripped
 // so matching is resilient to minor format variations.
@@ -44,23 +45,31 @@ export const mapFileNameMap: Record<string, MapName> = {
   cursedhollow: "Cursed Hollow",
   dragonshire: "Dragon Shire",
   gardenofterror: "Garden of Terror",
+  hauntedwoods: "Garden of Terror", // EndOfGameTalentChoices id
   hanamura: "Hanamura Temple",
   hanamurapayloadpush: "Hanamura Temple",
   hanamuratemple: "Hanamura Temple",
   hauntedmines: "Haunted Mines",
+  industrialdistrict: "Industrial District",
   infernalshrines: "Infernal Shrines",
+  shrines: "Infernal Shrines", // EndOfGameTalentChoices id
+  lostcavern: "Lost Cavern",
+  silvercity: "Silver City",
   skytemple: "Sky Temple",
+  controlpoints: "Sky Temple", // EndOfGameTalentChoices id
   tombofthespiderqueen: "Tomb of the Spider Queen",
+  crypts: "Tomb of the Spider Queen", // EndOfGameTalentChoices id
   towersofdoom: "Towers of Doom",
   volskayafoundry: "Volskaya Foundry",
   conveyorbelt: "Volskaya Foundry", // Internal codename
+  volskaya: "Volskaya Foundry", // EndOfGameTalentChoices id
   warheadjunction: "Warhead Junction",
 };
 
 // ── Normalizer ──────────────────────────────────────────────────────────────
 
 /**
- * Extracts the map identifier from an m_mapFileName path.
+ * Extracts the map identifier from a map id or m_mapFileName path.
  * Strips directory prefixes and file extensions, returning
  * a lowercase slug like "conveyorbelt" or "cursedhollowv3".
  */
@@ -83,11 +92,12 @@ function extractMapSlug(mapFileName: string): string {
 /**
  * Normalizes a map name to its canonical English form.
  *
- * Uses the language-independent m_mapFileName as the primary source,
+ * Uses the language-independent map id as the primary source,
  * falling back to checking if rawTitle is already an English map name.
  *
  * @param rawTitle    - The localized m_title from the replay details
- * @param mapFileName - The language-independent m_mapFileName (optional but preferred)
+ * @param mapFileName - Language-independent map id: the `EndOfGameTalentChoices`
+ *                      `Map` value or an m_mapFileName path (optional but preferred)
  * @returns The canonical English map name, or the rawTitle if no mapping is found
  */
 export function normalizeMapName(
@@ -96,7 +106,7 @@ export function normalizeMapName(
 ): string {
   if (!rawTitle && !mapFileName) return "";
 
-  // ── 1. Try m_mapFileName first (most reliable, language-independent) ───
+  // ── 1. Try the map id first (most reliable, language-independent) ──────
   if (mapFileName) {
     const slug = extractMapSlug(mapFileName);
     if (slug && mapFileNameMap[slug]) {
