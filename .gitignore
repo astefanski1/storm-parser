@@ -3,3 +3,5 @@ node_modules
 dist
 # Internal docs
 /docs/
+# Local replay corpus for tests (copied from the user's game folder; never committed)
+/tests/replays/corpus/

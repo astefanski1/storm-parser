@@ -39,12 +39,15 @@ export interface BanEntry {
 }
 
 export interface PickData {
+  /** Team 0 heroes, in draft order when the draft is complete, else player order. */
   0: string[];
   1: string[];
+  /** Team that picked first; -1 when the replay has no complete draft. */
   first: number;
 }
 
 // ── XP Breakdown ────────────────────────────────────────────────────────────
+/** XP values in XP points; times in seconds since the gates opened. */
 export interface XPValues {
   GameTime: number;
   PreviousGameTime: number;
@@ -61,7 +64,8 @@ export interface XPBreakdownEntry {
   team: number;
   teamLevel?: number;
   breakdown: XPValues;
-  theoreticalMinionXP: number;
+  /** End-of-game totals (`EndOfGameXPBreakdown`), one entry per team. */
+  final?: boolean;
 }
 
 // ── Mercenaries ─────────────────────────────────────────────────────────────
@@ -106,6 +110,8 @@ export interface StructureInfo {
 
 // ── Objectives ──────────────────────────────────────────────────────────────
 export interface ObjectiveEvent {
+  /** Tracker event name ("Immortal Defeated", "SoulEatersSpawned", …). */
+  name?: string;
   team: number;
   score?: number;
   loop: number;
@@ -309,6 +315,8 @@ export interface AnalysisResult {
   match?: MatchStat;
   players?: Record<string, PlayerStat>;
   error?: string;
+  /** Non-fatal decoding problems; the result may be partial when present. */
+  warnings?: string[];
 }
 
 // ── Raw Data Structures ─────────────────────────────────────────────────────
@@ -356,8 +364,9 @@ export interface RawDetails {
   m_difficulty: string | Buffer;
   m_thumbnail: { m_file: string | Buffer };
   m_isBlizzardMap: boolean;
-  m_timeUTC: bigint | number;
-  m_timeLocalOffset: bigint | number;
+  /** Windows FILETIME (100 ns ticks); a Number, exact to ~32 ticks (3 µs). */
+  m_timeUTC: number;
+  m_timeLocalOffset: number;
   m_mapFileName: string | Buffer;
   m_cacheHandles: (string | Buffer)[];
   m_miniSave: boolean;

@@ -8,9 +8,26 @@ import type {
   RawDetails,
   RawInitData,
 } from "./types/index.js";
-import { processTrackerEvents } from "./analyzers/trackerProcessor.js";
+import {
+  processTrackerEvents,
+  type DraftPick,
+} from "./analyzers/trackerProcessor.js";
 import { computeAnalytics } from "./analyzers/analyticsComputer.js";
 import { normalizeHeroName } from "./analyzers/heroesList.js";
+import { findBattleTagNumbers } from "./analyzers/battleTags.js";
+
+/** Matchmaking queue (`m_gameOptions.m_ammId`) → game mode. */
+export const AMM_MODES: Record<number, string> = {
+  50001: "Quick Match",
+  50021: "Versus AI",
+  50031: "Brawl",
+  50041: "Practice",
+  50051: "Unranked Draft",
+  50061: "Hero League",
+  50071: "Team League",
+  50091: "Storm League",
+  50101: "ARAM",
+};
 
 function bufStr(val: unknown): string {
   if (Buffer.isBuffer(val)) return val.toString("utf8");
@@ -62,7 +79,7 @@ export class ReplayAnalyzer {
         heroes: [],
         levelTimes: { "0": {}, "1": {} },
         bans: { "0": [], "1": [] },
-        picks: { 0: [], 1: [], first: 0 },
+        picks: { 0: [], 1: [], first: -1 },
         XPBreakdown: [],
         takedowns: [],
         mercs: { captures: [], units: {} },
@@ -85,16 +102,34 @@ export class ReplayAnalyzer {
       match.objective.type = match.map || "";
 
       // ── 2. Build players from details ──
+      // Keyed by ToonHandle; AI players all share one, so the k-th repeat of
+      // a handle is keyed `<handle>:<k>`. The tracker maps human PlayerInits by
+      // handle and computer ones (no handle) by lobby slot (`slotKeys`).
       const players: Record<string, PlayerStat> = {};
+      const detailsKeys: (string | undefined)[] = [];
+      const slotKeys: Record<number, string> = {};
+      const handleSeen: Record<string, number> = {};
       for (const pdata of details.m_playerList) {
-        if (!pdata?.m_toon) continue;
+        if (!pdata?.m_toon) {
+          detailsKeys.push(undefined);
+          continue;
+        }
         const toon = pdata.m_toon;
         const programId = bufStr(toon.m_programId);
         const toonHandle = `${toon.m_region}-${programId}-${toon.m_realm}-${toon.m_id}`;
+        const seen = handleSeen[toonHandle] ?? 0;
+        handleSeen[toonHandle] = seen + 1;
+        const key = seen === 0 ? toonHandle : `${toonHandle}:${seen}`;
+        const slot =
+          typeof pdata.m_workingSetSlotId === "number"
+            ? pdata.m_workingSetSlotId
+            : detailsKeys.length;
+        slotKeys[slot] = key;
+        detailsKeys.push(key);
         const rawHero = bufStr(pdata.m_hero);
         const hero = normalizeHeroName(rawHero) || rawHero;
 
-        players[toonHandle] = {
+        players[key] = {
           hero,
           name: bufStr(pdata.m_name),
           uuid: toon.m_id,
@@ -123,25 +158,30 @@ export class ReplayAnalyzer {
           units: {},
         };
 
-        match.playerIDs.push(toonHandle);
+        match.playerIDs.push(key);
         match.heroes.push(hero);
       }
 
       // ── 3. Extract BattleTags ──
-      this.extractBattleTags(parser, details, players);
+      this.extractBattleTags(parser, detailsKeys, players);
 
-      // ── 4. Extract draft (bans & picks) from initData ──
-      this.extractDraft(initData, match, details);
+      // ── 4. Extract mode (and game options) from initData; picks come in 5b ──
+      this.extractDraft(initData, match);
 
       // ── 4b. Extract cosmetics (skin, mount, announcer) from initData ──
-      this.extractCosmetics(initData, details, players, match);
+      this.extractCosmetics(initData, details, detailsKeys, players, match);
 
       // ── 5. Process all tracker events ──
-      const { playerIDMap } = processTrackerEvents(
+      const { playerIDMap, picks } = processTrackerEvents(
         trackerEvents,
         players,
         match,
+        slotKeys,
       );
+
+      // ── 5b. Picks (after hero recovery): draft order and first pick from
+      //        the pick events, else player order ──
+      this.applyDraftOrder(picks, details, match, players);
 
       // ── 6. Extract score results + talents + awards ──
       this.processScoreEvents(trackerEvents, playerIDMap, players);
@@ -162,7 +202,9 @@ export class ReplayAnalyzer {
       // ── 8. Compute all analytics ──
       computeAnalytics(match, players);
 
-      return { status: 1, match, players };
+      return parser.warnings.length > 0
+        ? { status: 1, match, players, warnings: [...parser.warnings] }
+        : { status: 1, match, players };
     } catch (error) {
       console.error("ReplayAnalyzer Error:", error);
       return { status: -2, error: String(error) };
@@ -225,48 +267,24 @@ export class ReplayAnalyzer {
 
   private static extractBattleTags(
     parser: ReplayParser,
-    details: RawDetails,
+    detailsKeys: (string | undefined)[],
     players: Record<string, PlayerStat>,
   ): void {
     const battleLobbyBuf = parser.extractFile("replay.server.battlelobby");
     if (!battleLobbyBuf) return;
-    try {
-      const btagRegExp = new RegExp("([\\p{L}\\d]{3,24}#\\d{4,10})[zØ]?", "gu");
-      const matches = battleLobbyBuf.toString("utf8").match(btagRegExp);
-      if (!matches) return;
-      for (const pdata of details.m_playerList) {
-        if (!pdata?.m_toon) continue;
-        const name = bufStr(pdata.m_name);
-
-        // Find the BattleTag in the matches array (independent of current index)
-        const foundIndex = matches.findIndex((m) => {
-          const parts = m.split("#");
-          return parts[0] === name;
-        });
-
-        if (foundIndex !== -1) {
-          const m = matches[foundIndex];
-          // Remove to avoid double-matching if multiple players have the same name (rare but safer)
-          matches.splice(foundIndex, 1);
-
-          const parts = m.split("#");
-          const mTag = parts[1].replace(/[zØ]/g, "");
-          const toon = pdata.m_toon;
-          const toonHandle = `${toon.m_region}-${bufStr(toon.m_programId)}-${toon.m_realm}-${toon.m_id}`;
-          if (players[toonHandle]) {
-            players[toonHandle].tag = parseInt(mTag, 10) || 0;
-          }
-        }
-      }
-    } catch (e) {
-      console.error("BattleTag regex error:", e);
-    }
+    const keys = detailsKeys.filter((k): k is string => !!k);
+    const tags = findBattleTagNumbers(
+      battleLobbyBuf,
+      keys.map((k) => players[k].name),
+    );
+    keys.forEach((key, i) => {
+      if (tags[i]) players[key].tag = tags[i];
+    });
   }
 
   private static extractDraft(
     initData: RawInitData | null,
     match: MatchStat,
-    details: RawDetails,
   ): void {
     if (!initData) return;
     try {
@@ -284,32 +302,13 @@ export class ReplayAnalyzer {
         >;
       }
 
-      // Extract picks from details player list (ordered by slot)
-      const team0Picks: string[] = [];
-      const team1Picks: string[] = [];
-      for (const pdata of details.m_playerList) {
-        if (!pdata?.m_toon) continue;
-        const rawHero = bufStr(pdata.m_hero);
-        const hero = normalizeHeroName(rawHero) || rawHero;
-        if (pdata.m_teamId === 0) team0Picks.push(hero);
-        else if (pdata.m_teamId === 1) team1Picks.push(hero);
-      }
-      match.picks = { 0: team0Picks, 1: team1Picks, first: 0 };
-
       // Extract game mode if available
       let foundMode: string | undefined = undefined;
 
       // New format check: m_ammId
       const gameOptions = gameDesc?.m_gameOptions;
       if (gameOptions && typeof gameOptions.m_ammId === "number") {
-        const ammId = gameOptions.m_ammId;
-        if (ammId === 50001) foundMode = "Quick Match";
-        else if (ammId === 50031) foundMode = "ARAM";
-        else if (ammId === 50041) foundMode = "Unranked Draft";
-        else if (ammId === 50051) foundMode = "Custom";
-        else if (ammId === 50061) foundMode = "Hero League";
-        else if (ammId === 50071) foundMode = "Team League";
-        else if (ammId === 50091) foundMode = "Storm League";
+        foundMode = AMM_MODES[gameOptions.m_ammId];
       }
 
       // Old format fallback: m_gameMode
@@ -329,27 +328,50 @@ export class ReplayAnalyzer {
       if (typeof lobbyState.m_gameType === "number") {
         match.type = lobbyState.m_gameType;
       }
-
-      // Extract bans from lobby slots or other sources
-      const slots = lobbyState.m_slots;
-      if (!slots) return;
-
-      // Check for ban data in lobby state
-      const pickBans = lobbyState.m_pickedMapTag as number | undefined;
-      let firstPickTeam = 0;
-      if (pickBans !== undefined) {
-        // First pick determination from lobby state
-        firstPickTeam = (lobbyState.m_firstPickTeam ?? 0) as number;
-        match.picks.first = firstPickTeam;
-      }
     } catch {
       // Draft extraction can fail for non-draft modes
     }
   }
 
+  /**
+   * `match.picks`: each team's heroes in player order (after hero recovery),
+   * replaced by the draft order from `SHeroPickedEvent` (team via the details
+   * player) and the first-pick team for a complete draft: 10 picks in the
+   * 1-2-2-2-2-1 pattern whose heroes are each team's final heroes. Otherwise
+   * `first` is -1.
+   */
+  private static applyDraftOrder(
+    picks: DraftPick[],
+    details: RawDetails,
+    match: MatchStat,
+    players: Record<string, PlayerStat>,
+  ): void {
+    const byTeam: Record<0 | 1, string[]> = { 0: [], 1: [] };
+    match.playerIDs.forEach((key, i) => {
+      const team = players[key]?.team;
+      if (team === 0 || team === 1) byTeam[team].push(match.heroes[i]);
+    });
+    match.picks = { 0: byTeam[0], 1: byTeam[1], first: -1 };
+    if (picks.length !== 10) return;
+    const teams = picks.map((p) => details.m_playerList[p.player]?.m_teamId);
+    const pattern = teams.join("");
+    if (pattern !== "0110011001" && pattern !== "1001100110") return;
+    const ordered: Record<0 | 1, string[]> = { 0: [], 1: [] };
+    picks.forEach((p, i) =>
+      ordered[teams[i] as 0 | 1].push(normalizeHeroName(p.hero) ?? p.hero),
+    );
+    const sameSet = (a: string[], b: string[]) =>
+      a.length === b.length && [...a].sort().join() === [...b].sort().join();
+    if (!sameSet(ordered[0], match.picks[0]) || !sameSet(ordered[1], match.picks[1])) {
+      return;
+    }
+    match.picks = { 0: ordered[0], 1: ordered[1], first: teams[0] as number };
+  }
+
   private static extractCosmetics(
     initData: RawInitData | null,
     details: RawDetails,
+    detailsKeys: (string | undefined)[],
     players: Record<string, PlayerStat>,
     match: MatchStat,
   ): void {
@@ -366,11 +388,10 @@ export class ReplayAnalyzer {
       // Match slots to players by iterating details.m_playerList in order
       // Slots and m_playerList share the same ordering
       let slotIndex = 0;
-      for (const pdata of details.m_playerList) {
-        if (!pdata?.m_toon) continue;
-        const toon = pdata.m_toon;
-        const toonHandle = `${toon.m_region}-${bufStr(toon.m_programId)}-${toon.m_realm}-${toon.m_id}`;
-        const player = players[toonHandle];
+      for (let d = 0; d < details.m_playerList.length; d++) {
+        const key = detailsKeys[d];
+        if (!key) continue;
+        const player = players[key];
 
         // Find the matching slot – walk through slots that have a hero
         while (slotIndex < slots.length) {
@@ -392,8 +413,8 @@ export class ReplayAnalyzer {
               const recoveredHero = normalizeHeroName(bufStr(slotHero));
               if (recoveredHero) {
                 player.hero = recoveredHero;
-                // Also update match-level list if possible (O(N) search)
-                const heroIdx = match.heroes.indexOf("");
+                // Same index as the player in match.playerIDs
+                const heroIdx = match.playerIDs.indexOf(key);
                 if (heroIdx !== -1) match.heroes[heroIdx] = recoveredHero;
               }
             }
@@ -471,7 +492,7 @@ export class ReplayAnalyzer {
     }
   }
 
-  private static fileTimeToDate(fileTime: bigint | number): Date {
-    return new Date(Number(fileTime) / 10000 - 11644473600000);
+  private static fileTimeToDate(fileTime: number): Date {
+    return new Date(fileTime / 10000 - 11644473600000);
   }
 }

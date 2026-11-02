@@ -13,7 +13,9 @@ pnpm add @astefanski/storm-parser
 # or npm install / yarn add
 ```
 
-> **Protocols are downloaded on install.** A `postinstall` script fetches every protocol definition from [Blizzard/heroprotocol](https://github.com/Blizzard/heroprotocol) into the package's `protocols/` folder (≈390 builds). It needs network access to the GitHub API and is skipped when `protocols/` already contains JSON — delete the folder and run `pnpm generate:protocols` to refresh after a new HotS patch.
+> **Protocols are included.** The package ships one protocol definition per HotS build (≈390, converted from [Blizzard/heroprotocol](https://github.com/Blizzard/heroprotocol)) in its `protocols/` folder. Installing runs no scripts and needs no network. Replays from a newer HotS patch than the package knows are decoded with the newest older protocol; update the package to pick up new builds.
+>
+> **0.1.0 is a breaking release:** removed LiveStreamParser, `ReplayParser.getGameEvents()`, the game/message event and `replay_attributes_events_typeid` fields of `Protocol`, `ReplayEvent._userid` and `XPBreakdownEntry.theoreticalMinionXP` (was always 0); `new ReplayParser()` requires a path or Buffer; `getAttributeEvents()` now returns `ReplayAttributes`; several analysis values changed meaning (see below).
 
 ## Usage
 
@@ -31,7 +33,7 @@ if (result.status === 1) {
 }
 ```
 
-`analyze()` takes a file path. Result: `{ status: 1, match, players }` or `{ status: -2, error }`.
+`analyze()` takes a file path. Result: `{ status: 1, match, players, warnings? }` or `{ status: -2, error }`. `warnings` lists non-fatal decoding problems (e.g. an event stream cut short); the result may then be partial.
 
 ### ReplayParser (raw data)
 
@@ -46,38 +48,36 @@ parser.getHeader();        // replay header (version, build)
 parser.getDetails();       // replay.details
 parser.getInitData();      // replay.initData (lobby, slots, game options)
 parser.getTrackerEvents(); // replay.tracker.events
-parser.getGameEvents();    // replay.game.events
+parser.getAttributeEvents(); // replay.attributes.events → { source, mapNamespace, scopes }
 parser.extractFile("replay.server.battlelobby"); // any raw MPQ file
 ```
 
-`getAttributeEvents()` is currently broken (missing typeid in generated protocols).
-
 ### Other exports
-- `LiveStreamParser` — decodes raw tracker/game/details/initData buffers for a given (or newest) build without an MPQ archive.
 - `loadProtocol(build)`, `getAvailableBuilds()` — protocol access.
-- `normalizeMapName(rawTitle, mapFileName?)` and type `MapName` — canonical map names (not applied automatically by `analyze()`).
+- `normalizeMapName(rawTitle, mapFileName?)` and type `MapName` — canonical map names (`analyze()` already returns canonical names).
 - `BitPackedDecoder`, `VersionedDecoder` — low-level decoders.
 - All result types (`AnalysisResult`, `MatchStat`, `PlayerStat`, `TeamStat`, …).
 
 ## What `analyze()` returns
 
 **Match** (`result.match`)
-- `map` (raw localized map title), `mode` (Storm League, Hero League, Quick Match, ARAM, Unranked Draft, Team League, Custom), `type`, `date` (ISO UTC), `rawDate` (Windows FILETIME), `length` (seconds), `region`, `version`.
-- `winner` (0/1; -1 if unresolved) and `winningPlayers` (ToonHandles).
-- Draft: `bans` per team `{ hero, order, absolute }`; `picks` per team (player-list order) and `picks.first` (falls back to 0 when unknown).
-- Timelines: `takedowns`, `levelTimes`, `XPBreakdown`, `mercs`, `structures`, `objective` (generic objective events: team, time, score), `levelAdvTimeline`.
-- `teams["0" | "1"]`: names, heroes, tags, level, takedowns and `stats` (totals, KDA, PPK, structures, level advantage, uptime, wipes/aces, passive XP).
+- `map` (canonical English name, any client language), `mode` (Storm League, Hero League, Team League, Unranked Draft, Quick Match, ARAM, Versus AI, Brawl, Practice, Custom), `type`, `date` (ISO UTC), `rawDate` (Windows FILETIME), `length` (seconds), `region`, `version`.
+- `winner` (0/1; -1 for a replay without a result, e.g. saved at a disconnect) and `winningPlayers`.
+- Draft: `bans` per team `{ hero, order, absolute }`; `picks` per team in draft order and `picks.first` = team that picked first (complete drafts; otherwise player order and `first = -1`).
+- Timelines: `takedowns` (`killers` = heroes credited, `x`/`y` in map cells), `levelTimes`, `XPBreakdown` (per team 0/1, XP points; end-of-game totals marked `final`), `mercs` (capturing team), `structures`, `objective` (map objective events with `name`, team, time, score, duration, end), `levelAdvTimeline`.
+- `teams["0" | "1"]`: names, heroes, tags, level, takedowns and `stats` (totals, KDA, PPK, structures, level advantage, uptime from real respawns, wipes/aces, passive XP).
 
-**Players** (`result.players`, keyed by ToonHandle `region-programId-realm-id`)
-- `name`, `tag` (BattleTag = `name#tag`; `0` if not found), `hero`, `team`, `win`, cosmetics (skin, mount, banner, spray, announcer), silence flags.
+**Players** (`result.players`, keyed by ToonHandle `region-programId-realm-id`; AI players sharing a handle get `…:1`, `…:2`)
+- `name`, `tag` (BattleTag = `name#tag`, any script; `0` if not found), `hero`, `team`, `win`, cosmetics (skin, mount, banner, spray, announcer), silence flags.
 - `talents` (`Tier1Choice` … `Tier7Choice`, internal talent ids), `awards`, `gameStats` (all score-screen values plus computed `DPM`, `HPM`, `XPM`, `KDA` = Takedowns / Deaths, `KillParticipation`, per-death stats).
-- `takedowns`, `deaths`, `units` (hero lives; spawn location only).
+- `takedowns`, `deaths`, `units` (one entry per hero: its lives with spawn and respawn points).
 
 ## Development
 
 ```bash
-pnpm install          # also downloads protocols
-pnpm test             # vitest
+pnpm install
+pnpm generate:protocols   # once: protocols/ is not in git (fetches only missing builds)
+pnpm test             # vitest; replay tests run on .StormReplay files in tests/replays/ or $STORM_PARSER_REPLAYS
 pnpm exec tsc --noEmit
 pnpm lint
 pnpm build            # tsup → dist/ (cjs + esm + d.ts)

@@ -51,7 +51,7 @@ function getProtocolsDir(): string {
 
   throw new Error(
     "@astefanski/storm-parser: Protocols directory not found. " +
-      "Did postinstall run? Try: npx tsx node_modules/@astefanski/storm-parser/scripts/postinstall.ts\n" +
+      "The package ships protocols/; reinstall it (in a clone of the repo run `pnpm generate:protocols`).\n" +
       "Searched: " +
       candidates.join(", "),
   );
