@@ -301,7 +301,9 @@ export class VersionedDecoder {
               ...(parent as unknown as Record<string, DecodedData>),
             };
           } else if (fields.length === 1) {
-            result = parent as unknown as Record<string, DecodedData>; // Wait, actually should be reassigned or returned depending on use-case
+            // A struct whose only field is a non-struct parent is that value
+            // (same as heroprotocol's VersionedDecoder._struct).
+            result = parent as unknown as Record<string, DecodedData>;
           } else {
             result[field[0]] = parent;
           }
@@ -356,6 +358,9 @@ export class VersionedDecoder {
     } else if (skip === 9) {
       // vint
       this._vint();
+    } else {
+      // An unknown code has an unknown size: continuing would desync.
+      throw new Error(`Unknown skip code ${skip} at byte ${this._buffer.used_bits() / 8}`);
     }
   }
 }

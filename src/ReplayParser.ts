@@ -3,6 +3,7 @@ import {
   BitPackedDecoder,
   VersionedDecoder,
 } from "./decoders/BitPackedDecoder";
+import { BitPackedBuffer } from "./decoders/BitPackedBuffer";
 import { loadProtocol, getAvailableBuilds } from "./protocols/map.js";
 import type { RawDetails, RawHeader, RawInitData } from "./types/index.js";
 
@@ -11,25 +12,32 @@ export type TypeInfo = [string, number[]?];
 export interface Protocol {
   version: number;
   typeinfos: TypeInfo[];
-  game_event_types: Record<number, [number, string]>;
-  message_event_types: Record<number, [number, string]>;
   tracker_event_types: Record<number, [number, string]>;
-  game_eventid_typeid: number;
-  message_eventid_typeid: number;
   tracker_eventid_typeid: number;
   svaruint32_typeid: number;
-  replay_userid_typeid: number;
   replay_header_typeid: number;
   game_details_typeid: number;
   replay_initdata_typeid: number;
-  replay_attributes_events_typeid: number;
+}
+
+/** One attribute of `replay.attributes.events` (value: bytes as text). */
+export interface AttributeValue {
+  namespace: number;
+  attrid: number;
+  value: string;
+}
+
+/** `replay.attributes.events`: attributes per scope (player slot, 16 = global) and id. */
+export interface ReplayAttributes {
+  source: number;
+  mapNamespace: number;
+  scopes: Record<number, Record<number, AttributeValue[]>>;
 }
 
 export interface ReplayEvent {
   _event: string;
   _eventid: number;
   _gameloop: number;
-  _userid?: unknown;
   _bits: number;
   [key: string]: unknown;
 }
@@ -40,11 +48,11 @@ export class ReplayParser {
   protected build: number = 0;
   protected protocol?: Protocol;
   protected baseProtocol?: Protocol;
+  /** Non-fatal decoding problems (e.g. a stream cut short at an unknown event). */
+  public readonly warnings: string[] = [];
 
-  constructor(filenameOrData?: string | Buffer) {
-    if (filenameOrData) {
-      this.mpq = new MpqReader(filenameOrData, false);
-    }
+  constructor(filenameOrData: string | Buffer) {
+    this.mpq = new MpqReader(filenameOrData);
   }
 
   public init(): void {
@@ -52,8 +60,8 @@ export class ReplayParser {
     const base = loadProtocol(29406);
     if (!base) {
       throw new Error(
-        "Base protocol29406 not found. Did postinstall run? " +
-          "Try: npx tsx node_modules/@astefanski/storm-parser/scripts/postinstall.ts",
+        "Base protocol29406 not found: the package's protocols/ folder is missing " +
+          "(in a clone of the repo run `pnpm generate:protocols`).",
       );
     }
     this.baseProtocol = base;
@@ -79,15 +87,16 @@ export class ReplayParser {
   protected loadProtocolForBuild(build: number): Protocol {
     let protocol = loadProtocol(build);
     if (!protocol) {
-      // Find closest available build that is <= the requested build
+      // Closest available build that is <= the requested build. A replay
+      // older than every protocol can't be decoded with any of them.
       const builds = getAvailableBuilds();
-      let closestBuild = builds[0];
-      for (const v of builds) {
-        if (v <= build && v > closestBuild) {
-          closestBuild = v;
-        }
+      const older = builds.filter((v) => v <= build);
+      if (older.length === 0) {
+        throw new Error(
+          `Replay build ${build} is older than every protocol (oldest ${builds[0]})`,
+        );
       }
-      protocol = loadProtocol(closestBuild);
+      protocol = loadProtocol(older[older.length - 1]);
     }
     if (!protocol) {
       throw new Error(`No protocol found for build ${build}`);
@@ -96,10 +105,10 @@ export class ReplayParser {
   }
 
   protected *decodeEventStream(
-    decoder: BitPackedDecoder | VersionedDecoder,
+    decoder: VersionedDecoder,
     eventidTypeid: number,
     eventTypes: Record<number, [number, string]>,
-    decodeUserId: boolean,
+    streamName: string,
   ): IterableIterator<ReplayEvent> {
     if (!this.protocol) throw new Error("Protocol not loaded");
     let gameloop = 0;
@@ -114,14 +123,16 @@ export class ReplayParser {
       const delta = deltaInstance[deltaKey];
       gameloop += delta;
 
-      const userid = decodeUserId
-        ? decoder.instance(this.protocol.replay_userid_typeid)
-        : undefined;
       const eventid = Number(decoder.instance(eventidTypeid));
 
       const eventType = eventTypes[eventid];
       if (!eventType) {
-        throw new Error(`Unknown eventid(${eventid})`);
+        // The event's size is unknown, so nothing after it can be decoded.
+        // Keep what was decoded and say where the stream was cut.
+        this.warnings.push(
+          `${streamName}: unknown eventid(${eventid}) at gameloop ${gameloop}; rest of the stream skipped`,
+        );
+        return;
       }
 
       const typeid = eventType[0];
@@ -131,7 +142,6 @@ export class ReplayParser {
       event._event = typename;
       event._eventid = eventid;
       event._gameloop = gameloop;
-      if (decodeUserId) event._userid = userid;
 
       decoder.byte_align();
       event._bits = decoder.used_bits() - startBits;
@@ -170,32 +180,18 @@ export class ReplayParser {
         decoder,
         this.protocol.tracker_eventid_typeid,
         this.protocol.tracker_event_types,
-        false,
+        "replay.tracker.events",
       ),
     );
   }
 
-  public getGameEvents(): ReplayEvent[] {
-    if (!this.protocol) throw new Error("Protocol not loaded");
-    const buf = this.mpq.readFile("replay.game.events");
-    if (!buf) return [];
-    const decoder = new BitPackedDecoder(buf, this.protocol.typeinfos);
-    return Array.from(
-      this.decodeEventStream(
-        decoder,
-        this.protocol.game_eventid_typeid,
-        this.protocol.game_event_types,
-        true,
-      ),
-    );
-  }
-
-  public getAttributeEvents(): unknown {
-    if (!this.protocol) throw new Error("Protocol not loaded");
+  /**
+   * `replay.attributes.events`. Not typeinfo-encoded: a little-endian bit
+   * stream (heroprotocol `decode_replay_attributes_events`).
+   */
+  public getAttributeEvents(): ReplayAttributes | null {
     const buf = this.mpq.readFile("replay.attributes.events");
-    if (!buf) return null;
-    const decoder = new VersionedDecoder(buf, this.protocol.typeinfos);
-    return decoder.instance(this.protocol.replay_attributes_events_typeid);
+    return buf ? decodeAttributeEvents(buf) : null;
   }
 
   public extractFile(filename: string): Buffer | null {
@@ -209,4 +205,26 @@ export class ReplayParser {
   public getBuild(): number {
     return this.build;
   }
+}
+
+export function decodeAttributeEvents(contents: Buffer): ReplayAttributes {
+  const buffer = new BitPackedBuffer(contents, "little");
+  const attributes: ReplayAttributes = { source: 0, mapNamespace: 0, scopes: {} };
+  if (buffer.done()) return attributes;
+  attributes.source = buffer.read_bits(8);
+  attributes.mapNamespace = buffer.read_bits(32);
+  buffer.read_bits(32); // count
+  while (!buffer.done()) {
+    const namespace = buffer.read_bits(32);
+    const attrid = buffer.read_bits(32);
+    const scope = buffer.read_bits(8);
+    const raw = Buffer.from(buffer.read_aligned_bytes(4)).reverse();
+    let end = raw.length;
+    while (end > 0 && raw[end - 1] === 0) end--;
+    let start = 0;
+    while (start < end && raw[start] === 0) start++;
+    const value = raw.toString("latin1", start, end);
+    ((attributes.scopes[scope] ??= {})[attrid] ??= []).push({ namespace, attrid, value });
+  }
+  return attributes;
 }

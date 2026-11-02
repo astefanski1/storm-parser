@@ -44,6 +44,7 @@ export const validHeroes = [
   "LiLi",
   "LiMing",
   "LtMorales",
+  "Lucio",
   "Lunara",
   "Maiev",
   "Malfurion",
@@ -110,6 +111,9 @@ export const heroNameMap: Record<string, string> = {
   Dryad: "Lunara",
   Shapeshifter: "Greymane",
   ChoGall: "Cho", // Could be Cho or Gall
+  Firebat: "Blaze",
+  MeiOW: "Mei",
+  NexusHunter: "Qhira",
 };
 
 export function normalizeHeroName(rawName: string): string | null {
@@ -120,7 +124,12 @@ export function normalizeHeroName(rawName: string): string | null {
   if (heroNameMap[rawName]) return heroNameMap[rawName];
 
   // Strip non-alphas and check case insensitive
-  const clean = rawName.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  // Accents are folded first ("Lúcio" → "lucio")
+  const clean = rawName
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .toLowerCase();
 
   // Try stripping "hero" prefix from internal names (e.g. HeroAbathur)
   if (clean.startsWith("hero") && clean.length > 4) {

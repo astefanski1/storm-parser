@@ -80,14 +80,31 @@ function buildEncryptionTable(): Uint32Array {
 
 const encryptionTable = buildEncryptionTable();
 
+/** Sector compression masks HotS replays use (first byte of a compressed sector). */
+const COMPRESSION_ZLIB = 0x02;
+const COMPRESSION_BZIP2 = 0x10;
+
+/**
+ * Decompresses one sector. HotS replays only use zlib or bzip2; anything else
+ * (Huffman, PKWARE, LZMA, sparse, ADPCM, combined masks) is rejected.
+ */
+export function decompressSector(data: Buffer, filename: string): Buffer {
+  const mask = data[0];
+  if (mask === 0) return data;
+  if (mask === COMPRESSION_ZLIB) return zlib.inflateSync(data.subarray(1));
+  if (mask === COMPRESSION_BZIP2) return bzip.decode(data.subarray(1));
+  throw new Error(
+    `Unsupported MPQ compression 0x${mask.toString(16)} in ${filename} (only zlib and bzip2)`,
+  );
+}
+
 export class MpqReader {
   file: Buffer;
   header: MPQFileHeader;
   hashTable: MPQHashTableEntry[];
   blockTable: MPQBlockTableEntry[];
-  files: string[] | null;
 
-  constructor(filenameOrData: string | Buffer, readListfile: boolean = true) {
+  constructor(filenameOrData: string | Buffer) {
     if (Buffer.isBuffer(filenameOrData)) {
       this.file = filenameOrData;
     } else {
@@ -95,18 +112,23 @@ export class MpqReader {
     }
 
     this.header = this.readHeader();
+    if (!this.header.hashTableEntries) {
+      throw new Error(
+        "MPQ archive has no hash table (HET/BET-only archives are not supported)",
+      );
+    }
     this.hashTable = this.readTable("hash") as MPQHashTableEntry[];
     this.blockTable = this.readTable("block") as MPQBlockTableEntry[];
+    this.applyHighBlockOffsets();
+  }
 
-    if (readListfile) {
-      const listfileBuf = this.readFile("(listfile)");
-      if (listfileBuf) {
-        this.files = listfileBuf.toString("utf8").trim().split("\r\n");
-      } else {
-        this.files = null;
-      }
-    } else {
-      this.files = null;
+  /** MPQ v2+ (formatVersion ≥ 1): the hi-block table holds bits 32–47 of every block offset. */
+  private applyHighBlockOffsets(): void {
+    const hiOffset = this.header.extendedBlockTableOffset;
+    if (!hiOffset) return;
+    const start = hiOffset + (this.header.offset || 0);
+    for (let i = 0; i < this.blockTable.length; i++) {
+      this.blockTable[i].offset += this.file.readUInt16LE(start + i * 2) * 0x100000000;
     }
   }
 
@@ -143,12 +165,14 @@ export class MpqReader {
       blockTableEntries: data.readUInt32LE(28),
     };
 
-    if (header.formatVersion === 1) {
+    // formatVersion is 0-based: every header from MPQ v2 (1) on carries the
+    // hi-block table offset and the tables' high offset bits at bytes 32–43.
+    if (header.formatVersion >= 1) {
       const extData = this.file.subarray(offset + 32, offset + 32 + 12);
       header.extendedBlockTableOffset =
         extData.readUInt32LE(0) + extData.readUInt32LE(4) * 0x100000000;
-      header.hashTableOffsetHigh = extData.readInt8(8);
-      header.blockTableOffsetHigh = extData.readInt8(10);
+      header.hashTableOffsetHigh = extData.readUInt16LE(8);
+      header.blockTableOffsetHigh = extData.readUInt16LE(10);
     }
 
     return header;
@@ -172,7 +196,11 @@ export class MpqReader {
     const tableEntriesField =
       tableType === "hash" ? "hashTableEntries" : "blockTableEntries";
 
-    const tableOffset = this.header[tableOffsetField];
+    const high =
+      (tableType === "hash"
+        ? this.header.hashTableOffsetHigh
+        : this.header.blockTableOffsetHigh) ?? 0;
+    const tableOffset = this.header[tableOffsetField] + high * 0x100000000;
     const tableEntries = this.header[tableEntriesField];
 
     if (tableOffset == null || tableEntries == null) {
@@ -221,22 +249,7 @@ export class MpqReader {
     return undefined;
   }
 
-  public readFile(filename: string, forceDecompress = false): Buffer | null {
-    function decompress(data: Buffer): Buffer {
-      const compressionType = data[0];
-
-      if (compressionType === 0) return data;
-      else if (compressionType === 2) return zlib.inflateSync(data.subarray(1));
-      else if (compressionType === 16) {
-        return bzip.decode(data.subarray(1));
-      } else {
-        try {
-          return zlib.inflateSync(data.subarray(1));
-        } catch {
-          return zlib.inflateRawSync(data.subarray(1));
-        }
-      }
-    }
+  public readFile(filename: string): Buffer | null {
 
     const hashEntry = this.getHashTableEntry(filename);
     if (!hashEntry) return null;
@@ -250,7 +263,7 @@ export class MpqReader {
     let fileData = this.file.subarray(offset, offset + blockEntry.archivedSize);
 
     if (blockEntry.flags & MPQ_FILE_ENCRYPTED) {
-      throw new Error("Encryption is not supported");
+      throw new Error(`MPQ file ${filename} is encrypted (not supported)`);
     }
 
     if (!(blockEntry.flags & MPQ_FILE_SINGLE_UNIT)) {
@@ -276,9 +289,9 @@ export class MpqReader {
         let sector = fileData.subarray(positions[i], positions[i + 1]);
         if (
           blockEntry.flags & MPQ_FILE_COMPRESS &&
-          (forceDecompress || sectorBytesLeft > sector.length)
+          sectorBytesLeft > sector.length
         ) {
-          sector = decompress(sector);
+          sector = decompressSector(sector, filename);
         }
         sectorBytesLeft -= sector.length;
         buffers.push(sector);
@@ -287,9 +300,9 @@ export class MpqReader {
     } else {
       if (
         blockEntry.flags & MPQ_FILE_COMPRESS &&
-        (forceDecompress || blockEntry.size > blockEntry.archivedSize)
+        blockEntry.size > blockEntry.archivedSize
       ) {
-        fileData = decompress(fileData);
+        fileData = decompressSector(fileData, filename);
       }
     }
 

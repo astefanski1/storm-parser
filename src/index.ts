@@ -1,6 +1,10 @@
 export { ReplayParser } from "./ReplayParser";
-export { LiveStreamParser } from "./LiveStreamParser";
-export type { Protocol, ReplayEvent } from "./ReplayParser";
+export type {
+  Protocol,
+  ReplayEvent,
+  ReplayAttributes,
+  AttributeValue,
+} from "./ReplayParser";
 export { ReplayAnalyzer } from "./ReplayAnalyzer";
 export {
   VersionedDecoder,

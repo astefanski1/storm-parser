@@ -81,37 +81,6 @@ export class BitPackedBuffer {
     return result;
   }
 
-  public read_bits_bigint(bits: number): bigint {
-    let result = 0n;
-    let resultbits = 0;
-
-    while (resultbits !== bits) {
-      if (this._nextbits === 0) {
-        if (this.done()) {
-          throw new TruncatedError();
-        }
-        this._next = this._data[this._used];
-        this._used += 1;
-        this._nextbits = 8;
-      }
-
-      const copybits = Math.min(bits - resultbits, this._nextbits);
-      const copy = BigInt(this._next & ((1 << copybits) - 1));
-
-      if (this._bigendian) {
-        result |= copy << BigInt(bits - resultbits - copybits);
-      } else {
-        result |= copy << BigInt(resultbits);
-      }
-
-      this._next >>= copybits;
-      this._nextbits -= copybits;
-      resultbits += copybits;
-    }
-
-    return result;
-  }
-
   public read_unaligned_bytes(bytes: number): Buffer {
     const buf = Buffer.alloc(bytes);
     for (let i = 0; i < bytes; i++) {

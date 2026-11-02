@@ -19,7 +19,7 @@
   },
   "files": [
     "dist",
-    "scripts"
+    "protocols"
   ],
   "publishConfig": {
     "access": "public"
@@ -34,8 +34,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "build": "tsup",
-    "postinstall": "tsx scripts/postinstall.ts",
-    "generate:protocols": "tsx scripts/postinstall.ts"
+    "generate:protocols": "tsx scripts/generate-protocols.ts",
+    "prepublishOnly": "pnpm generate:protocols && pnpm lint && pnpm exec tsc --noEmit && pnpm test && pnpm build"
   },
   "keywords": [],
   "author": {
@@ -49,12 +49,12 @@
     "eslint": "^10.0.1",
     "globals": "^17.3.0",
     "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.0",
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "seek-bzip": "^2.0.0",
-    "tsx": "^4.21.0"
+    "seek-bzip": "^2.0.0"
   }
 }

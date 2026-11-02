@@ -7,6 +7,7 @@ export const validMaps = [
   "Battlefield of Eternity",
   "Blackheart's Bay",
   "Braxis Holdout",
+  "Braxis Outpost",
   "Cursed Hollow",
   "Dragon Shire",
   "Garden of Terror",
@@ -40,6 +41,7 @@ export const mapFileNameMap: Record<string, MapName> = {
   battlefieldofeternity: "Battlefield of Eternity",
   blackheartsbay: "Blackheart's Bay",
   braxisholdout: "Braxis Holdout",
+  braxisoutpost: "Braxis Outpost", // ARAM
   cursedhollowv3: "Cursed Hollow",
   cursedhollowv2: "Cursed Hollow",
   cursedhollow: "Cursed Hollow",

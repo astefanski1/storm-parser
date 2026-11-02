@@ -8,6 +8,7 @@ import type {
   LevelAdvSegment,
   UptimeEntry,
 } from "../types/index.js";
+import { estimateRespawn } from "./trackerProcessor.js";
 
 // ── Totals stat keys to aggregate ───────────────────────────────────────────
 const TOTAL_KEYS: (keyof TeamTotals)[] = [
@@ -143,11 +144,11 @@ function computeTeamData(
     const tDeaths = deaths;
     team.stats.KDA = tDeaths > 0 ? tkd / tDeaths : tkd;
 
-    // PPK (players per kill)
+    // PPK (players per kill): hero participants per takedown of an opponent
     team.stats.PPK =
       tkd > 0
         ? match.takedowns
-            .filter((td) => team.ids.includes(td.killers[0]?.player))
+            .filter((td) => !team.ids.includes(td.victim.player))
             .reduce((s, td) => s + td.killers.length, 0) / tkd
         : 0;
 
@@ -344,11 +345,23 @@ function computeTeamAnalytics(
     const team = match.teams[teamKey];
     if (!team) continue;
 
-    // Build death/respawn timeline
+    // Death/respawn timeline from the hero lives (respawn = real revive,
+    // or the level-table estimate the tracker used for heroes that never
+    // revive). Players without lives fall back to deaths + the estimate.
     const deathEvents: { time: number; delta: number }[] = [];
     for (const toon of team.ids) {
       const p = players[toon];
       if (!p) continue;
+      const lives = Object.values(p.units)[0]?.lives;
+      if (lives?.length) {
+        lives.forEach((life, i) => {
+          if (i > 0) deathEvents.push({ time: life.born, delta: 1 });
+          if (life.died !== undefined) {
+            deathEvents.push({ time: life.died, delta: -1 });
+          }
+        });
+        continue;
+      }
       for (const d of p.deaths) {
         deathEvents.push({ time: d.time, delta: -1 });
         const respawnTime = d.time + estimateRespawn(p.gameStats["Level"] ?? 1);
@@ -389,16 +402,11 @@ function computeTeamAnalytics(
     }
     team.stats.avgHeroesAlive = total > 0 ? weighted / total : team.ids.length;
 
-    // Wipes (0 heroes alive) and aces
-    team.stats.wipes = uptime.filter((u) => u.heroes === 0).length;
-    team.stats.aces = 0; // opponent wipes
-    const oppKey = teamKey === "0" ? "1" : "0";
-    const oppTeam = match.teams[oppKey];
-    if (oppTeam?.stats?.uptime) {
-      team.stats.aces = oppTeam.stats.uptime.filter(
-        (u) => u.heroes === 0,
-      ).length;
-    }
+    // Wipes: transitions from heroes alive to none (aces = the opponent's
+    // wipes, set below once both teams are computed)
+    team.stats.wipes = uptime.filter(
+      (u, i) => u.heroes === 0 && i > 0 && uptime[i - 1].heroes > 0,
+    ).length;
 
     // PassiveXP
     const xpEntries = match.XPBreakdown.filter(
@@ -413,12 +421,13 @@ function computeTeamAnalytics(
     }
   }
 
-  // Hero advantage time
+  // Hero advantage time and aces
   for (const teamKey of ["0", "1"]) {
     const team = match.teams[teamKey];
     const oppKey = teamKey === "0" ? "1" : "0";
     const oppTeam = match.teams[oppKey];
     if (!team || !oppTeam) continue;
+    team.stats.aces = oppTeam.stats.wipes;
 
     const teamUp = team.stats.uptime;
     const oppUp = oppTeam.stats.uptime;
@@ -462,14 +471,6 @@ function getHeroesAtTime(uptime: UptimeEntry[], time: number): number {
   return heroes;
 }
 
-function estimateRespawn(level: number): number {
-  // Simplified respawn timer estimation based on level
-  if (level <= 1) return 15;
-  if (level <= 5) return 15 + (level - 1) * 2;
-  if (level <= 10) return 23 + (level - 5) * 3;
-  if (level <= 15) return 38 + (level - 10) * 4;
-  return 58 + (level - 15) * 5;
-}
 
 // ── First events ────────────────────────────────────────────────────────────
 function computeFirstEvents(match: MatchStat): void {
@@ -512,5 +513,5 @@ function computeFirstEvents(match: MatchStat): void {
   }
 
   // First pick win
-  match.firstPickWin = match.picks.first === match.winner;
+  match.firstPickWin = match.picks.first >= 0 && match.picks.first === match.winner;
 }
