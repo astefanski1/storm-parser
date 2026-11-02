@@ -82,6 +82,7 @@ export const validHeroes = [
   "Valla",
   "Varian",
   "Whitemane",
+  "Xalatath",
   "Xul",
   "Yrel",
   "Zagara",

@@ -2,8 +2,11 @@ import { describe, it, expect, beforeAll } from "vitest";
 import * as path from "path";
 import * as fs from "fs";
 import { ReplayAnalyzer } from "../src/ReplayAnalyzer";
-import type { AnalysisResult } from "../src/types/index";
-import { validMaps } from "../src/analyzers/mapsList";
+import type { AnalysisResult, MatchStat } from "../src/types/index";
+import type { ReplayEvent } from "../src/ReplayParser";
+import { validMaps, normalizeMapName } from "../src/analyzers/mapsList";
+import { normalizeHeroName } from "../src/analyzers/heroesList";
+import { processTrackerEvents } from "../src/analyzers/trackerProcessor";
 
 describe("ReplayAnalyzer", () => {
   const replaysDir: string = path.resolve(__dirname, "replays");
@@ -426,4 +429,41 @@ describe("ReplayAnalyzer", () => {
       });
     });
   }
+});
+
+describe("map and hero normalization", () => {
+  it("maps EndOfGameTalentChoices map ids to canonical names", () => {
+    expect(normalizeMapName("Grobowiec Królowej Pająków", "Crypts")).toBe(
+      "Tomb of the Spider Queen",
+    );
+    expect(normalizeMapName("x", "ControlPoints")).toBe("Sky Temple");
+    expect(normalizeMapName("x", "Shrines")).toBe("Infernal Shrines");
+    expect(normalizeMapName("x", "HauntedWoods")).toBe("Garden of Terror");
+    expect(normalizeMapName("x", "Volskaya")).toBe("Volskaya Foundry");
+    expect(normalizeMapName("x", "Hanamura")).toBe("Hanamura Temple");
+    expect(normalizeMapName("x", "Warhead Junction")).toBe("Warhead Junction");
+    expect(normalizeMapName("Dragon Shire", "UnknownId")).toBe("Dragon Shire");
+    expect(normalizeMapName("Unbekannt", undefined)).toBe("Unbekannt");
+  });
+
+  it("replaces a localized m_title with the canonical name from the Map id", () => {
+    const match = { map: "Smocza Kraina" } as unknown as MatchStat;
+    const event = {
+      _event: "NNet.Replay.Tracker.SStatGameEvent",
+      _gameloop: 100,
+      m_eventName: "EndOfGameTalentChoices",
+      m_intData: [{ m_key: "PlayerID", m_value: 1 }],
+      m_stringData: [{ m_key: "Map", m_value: "DragonShire" }],
+      m_fixedData: [],
+    } as unknown as ReplayEvent;
+    processTrackerEvents([event], {}, match);
+    expect(match.map).toBe("Dragon Shire");
+    expect(match.objective.type).toBe("Dragon Shire");
+  });
+
+  it("knows Xal'atath under all replay spellings", () => {
+    expect(normalizeHeroName("Xal'atath")).toBe("Xalatath");
+    expect(normalizeHeroName("HeroXalatath")).toBe("Xalatath");
+    expect(normalizeHeroName("Xalatath")).toBe("Xalatath");
+  });
 });
