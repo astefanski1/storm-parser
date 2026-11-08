@@ -1,6 +1,6 @@
 {
   "name": "@astefanski/storm-parser",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Storm Parser is a tool for parsing Heroes of the Storm replays.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
