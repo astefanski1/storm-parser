@@ -34,8 +34,9 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "build": "tsup",
+    "check:dist": "node scripts/check-dist.mjs",
     "generate:protocols": "tsx scripts/generate-protocols.ts",
-    "prepublishOnly": "pnpm generate:protocols && pnpm lint && pnpm exec tsc --noEmit && pnpm test && pnpm build"
+    "prepublishOnly": "pnpm generate:protocols && pnpm lint && pnpm exec tsc --noEmit && pnpm test && pnpm build && pnpm check:dist"
   },
   "keywords": [],
   "author": {
