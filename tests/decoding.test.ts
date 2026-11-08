@@ -18,6 +18,7 @@ const bareParser = (protocol?: Partial<Protocol>) => {
       eventidTypeid: number,
       types: Record<number, [number, string]>,
       name: string,
+      userIdTypeid?: number,
     ) => IterableIterator<ReplayEvent>;
     loadProtocolForBuild: (build: number) => Protocol;
   };
@@ -45,6 +46,74 @@ describe("event streams", () => {
     expect(p.warnings).toEqual([
       "replay.tracker.events: unknown eventid(99) at gameloop 5; rest of the stream skipped",
     ]);
+  });
+});
+
+describe("message event stream", () => {
+  it("reads the user id between the gameloop delta and the event id", () => {
+    const calls: number[] = [];
+    // typeid → next value: 0 delta, 8 user id, 1 event id, 178 chat body
+    const queue: Record<number, unknown[]> = {
+      0: [{ m_uint6: 10 }, { m_uint14: 300 }],
+      8: [{ m_userId: 3 }, { m_userId: 12 }],
+      1: [0, 0],
+      178: [{ m_recipient: 1, m_string: "gl" }, { m_recipient: 0, m_string: "gg" }],
+    };
+    let left = 8;
+    const decoder = {
+      done: () => left === 0,
+      used_bits: () => 0,
+      byte_align: () => {},
+      instance: (typeid: number) => {
+        calls.push(typeid);
+        left--;
+        return queue[typeid].shift();
+      },
+    };
+    const p = bareParser({ svaruint32_typeid: 0 });
+    const events = Array.from(
+      p.decodeEventStream(
+        decoder,
+        1,
+        { 0: [178, "NNet.Game.SChatMessage"] },
+        "replay.message.events",
+        8,
+      ),
+    );
+    expect(calls).toEqual([0, 8, 1, 178, 0, 8, 1, 178]);
+    expect(events.map((e) => [e._gameloop, e._userid, e.m_string])).toEqual([
+      [10, 3, "gl"],
+      [310, 12, "gg"],
+    ]);
+  });
+
+  it("returns no messages when the protocol lacks the message fields", () => {
+    const p = bareParser({ svaruint32_typeid: 0 });
+    Object.assign(p, { mpq: { readFile: () => Buffer.alloc(4) } });
+    expect(p.getMessageEvents()).toEqual([]);
+  });
+
+  it("keeps the messages before a decode error and records a warning", () => {
+    // Bytes: delta, user id, event id, body (event 5) · delta, user id, event 6 → typeid 99 throws.
+    const p = bareParser({
+      svaruint32_typeid: 2,
+      replay_userid_typeid: 3,
+      message_eventid_typeid: 0,
+      message_event_types: { 5: [1, "NNet.Game.SChatMessage"], 6: [99, "NNet.Game.SBroken"] },
+      typeinfos: [
+        ["_int", [[0, 8]]],
+        ["_struct", [[["m_a", 0, 0]]]],
+        ["_struct", [[["m_uint6", 0, 0]]]],
+        ["_struct", [[["m_userId", 0, 0]]]],
+      ] as never,
+    });
+    Object.assign(p, { mpq: { readFile: () => Buffer.from([1, 3, 5, 7, 1, 4, 6]) } });
+    const events = p.getMessageEvents();
+    expect(events.map((e) => [e._event, e._gameloop, e._userid, e.m_a])).toEqual([
+      ["NNet.Game.SChatMessage", 1, 3, 7],
+    ]);
+    expect(p.warnings).toHaveLength(1);
+    expect(p.warnings[0]).toMatch(/^replay\.message\.events: .*rest of the stream skipped$/);
   });
 });
 

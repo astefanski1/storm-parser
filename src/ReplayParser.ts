@@ -18,7 +18,13 @@ export interface Protocol {
   replay_header_typeid: number;
   game_details_typeid: number;
   replay_initdata_typeid: number;
+  /** Message stream fields; absent in protocol JSON generated before they were added. */
+  message_event_types?: Record<number, [number, string]>;
+  message_eventid_typeid?: number;
+  replay_userid_typeid?: number;
 }
+
+type EventDecoder = Pick<VersionedDecoder, "instance" | "done" | "used_bits" | "byte_align">;
 
 /** One attribute of `replay.attributes.events` (value: bytes as text). */
 export interface AttributeValue {
@@ -39,6 +45,8 @@ export interface ReplayEvent {
   _eventid: number;
   _gameloop: number;
   _bits: number;
+  /** Sender lobby user id; only on streams decoded with a user id (messages). */
+  _userid?: number;
   [key: string]: unknown;
 }
 
@@ -105,10 +113,11 @@ export class ReplayParser {
   }
 
   protected *decodeEventStream(
-    decoder: VersionedDecoder,
+    decoder: EventDecoder,
     eventidTypeid: number,
     eventTypes: Record<number, [number, string]>,
     streamName: string,
+    userIdTypeid?: number,
   ): IterableIterator<ReplayEvent> {
     if (!this.protocol) throw new Error("Protocol not loaded");
     let gameloop = 0;
@@ -122,6 +131,13 @@ export class ReplayParser {
       const deltaKey = Object.keys(deltaInstance)[0];
       const delta = deltaInstance[deltaKey];
       gameloop += delta;
+
+      // heroprotocol `_decode_event_stream` order: delta, user id, event id.
+      let userid: number | undefined;
+      if (userIdTypeid !== undefined) {
+        const raw = decoder.instance(userIdTypeid) as { m_userId?: number } | number;
+        userid = Number(typeof raw === "object" && raw !== null ? raw.m_userId : raw);
+      }
 
       const eventid = Number(decoder.instance(eventidTypeid));
 
@@ -142,6 +158,7 @@ export class ReplayParser {
       event._event = typename;
       event._eventid = eventid;
       event._gameloop = gameloop;
+      if (userid !== undefined) event._userid = userid;
 
       decoder.byte_align();
       event._bits = decoder.used_bits() - startBits;
@@ -171,18 +188,57 @@ export class ReplayParser {
   }
 
   public getTrackerEvents(): ReplayEvent[] {
+    return Array.from(this.iterTrackerEvents());
+  }
+
+  /** Tracker events decoded lazily, so a caller can stop early (e.g. at `GatesOpen`). */
+  public *iterTrackerEvents(): IterableIterator<ReplayEvent> {
     if (!this.protocol) throw new Error("Protocol not loaded");
     const buf = this.mpq.readFile("replay.tracker.events");
-    if (!buf) return [];
+    if (!buf) return;
     const decoder = new VersionedDecoder(buf, this.protocol.typeinfos);
-    return Array.from(
-      this.decodeEventStream(
-        decoder,
-        this.protocol.tracker_eventid_typeid,
-        this.protocol.tracker_event_types,
-        "replay.tracker.events",
-      ),
+    yield* this.decodeEventStream(
+      decoder,
+      this.protocol.tracker_eventid_typeid,
+      this.protocol.tracker_event_types,
+      "replay.tracker.events",
     );
+  }
+
+  /**
+   * `replay.message.events` (chat, pings, loading progress, announcements),
+   * each with `_userid`. `[]` when the file or the protocol's message fields
+   * are missing; a decode error keeps the earlier events and adds a warning.
+   */
+  public getMessageEvents(): ReplayEvent[] {
+    if (!this.protocol) throw new Error("Protocol not loaded");
+    const { message_event_types, message_eventid_typeid, replay_userid_typeid } = this.protocol;
+    if (
+      !message_event_types ||
+      message_eventid_typeid === undefined ||
+      replay_userid_typeid === undefined
+    ) {
+      return [];
+    }
+    const buf = this.mpq.readFile("replay.message.events");
+    if (!buf) return [];
+    const decoder = new BitPackedDecoder(buf, this.protocol.typeinfos);
+    // Non-critical stream: a decode error keeps the events before it (like an unknown event id).
+    const events: ReplayEvent[] = [];
+    try {
+      for (const ev of this.decodeEventStream(
+        decoder,
+        message_eventid_typeid,
+        message_event_types,
+        "replay.message.events",
+        replay_userid_typeid,
+      )) {
+        events.push(ev);
+      }
+    } catch (error) {
+      this.warnings.push(`replay.message.events: ${String(error)}; rest of the stream skipped`);
+    }
+    return events;
   }
 
   /**

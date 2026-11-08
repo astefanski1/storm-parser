@@ -1,4 +1,6 @@
+import fs from "fs";
 import { describe, it, expect, beforeAll } from "vitest";
+import { ReplayAnalyzer } from "../src/ReplayAnalyzer";
 import type { AnalysisResult } from "../src/types/index";
 import {
   analyzeReplay,
@@ -169,5 +171,34 @@ describe.skipIf(replayFiles.length === 0)("replay corpus oracles", () => {
       expect(new Set(ids).size, file).toBe(ids.length);
       expect(Object.keys(r.players!).length, file).toBe(ids.length);
     }
+  });
+
+  it("reads chat with known senders, valid recipients and ordered times", () => {
+    let lines = 0;
+    let named = 0;
+    for (const { file, r } of results) {
+      const chat = ReplayAnalyzer.readChat(file);
+      expect(chat.status, file).toBe(1);
+      expect(ReplayAnalyzer.readChat(fs.readFileSync(file)), file).toEqual(chat);
+      const messages = chat.messages!;
+      lines += messages.length;
+      for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        expect(["all", "allies", "observers", "other"], file).toContain(m.recipient);
+        expect(typeof m.text, file).toBe("string");
+        if (i > 0) expect(m.gameloop, file).toBeGreaterThanOrEqual(messages[i - 1].gameloop);
+        if (!m.player || r.status !== 1) continue;
+        named++;
+        if (m.player.observer) continue;
+        // Names can repeat (hidden names show as "Player"): match the hero too.
+        const inGame = Object.values(r.players!).find(
+          (p) =>
+            p.name === m.player!.name && p.team === m.player!.team && p.hero === m.player!.hero,
+        );
+        expect(inGame, `${file}: ${m.player.name} (${m.player.hero})`).toBeDefined();
+      }
+    }
+    expect(lines).toBeGreaterThan(0);
+    expect(named).toBe(lines);
   });
 });

@@ -3,7 +3,11 @@ import {
   parsePythonLiteral,
   extractVariable,
   protocolFromPython,
+  isComplete,
 } from "../scripts/generate-protocols";
+import fs from "fs";
+import os from "os";
+import path from "path";
 
 describe("protocol generator: strict Python literal parser", () => {
   it("parses heroprotocol literals without eval", () => {
@@ -37,6 +41,11 @@ describe("protocol generator: strict Python literal parser", () => {
       "replay_header_typeid = 18",
       "game_details_typeid = 40",
       "replay_initdata_typeid = 73",
+      "message_event_types = {",
+      "    0: (100, 'NNet.Game.SChatMessage'),",
+      "}",
+      "message_eventid_typeid = 3",
+      "replay_userid_typeid = 9",
     ].join("\n");
     expect(extractVariable(code, "svaruint32_typeid")).toBe(7);
     expect(protocolFromPython(12345, code)).toEqual({
@@ -48,7 +57,37 @@ describe("protocol generator: strict Python literal parser", () => {
       replay_header_typeid: 18,
       game_details_typeid: 40,
       replay_initdata_typeid: 73,
+      message_event_types: { "0": [100, "NNet.Game.SChatMessage"] },
+      message_eventid_typeid: 3,
+      replay_userid_typeid: 9,
     });
     expect(() => extractVariable(code, "missing")).toThrow(/not found/);
+  });
+});
+
+describe("protocol generator: completeness check", () => {
+  it("refetches missing, unreadable or incomplete JSON", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sp-gen-"));
+    const file = path.join(dir, "protocol1.json");
+    expect(isComplete(file)).toBe(false);
+    fs.writeFileSync(file, "{not json");
+    expect(isComplete(file)).toBe(false);
+    const old = {
+      typeinfos: [],
+      tracker_event_types: {},
+      tracker_eventid_typeid: 0,
+      svaruint32_typeid: 0,
+      replay_header_typeid: 0,
+      game_details_typeid: 0,
+      replay_initdata_typeid: 0,
+    };
+    fs.writeFileSync(file, JSON.stringify(old));
+    expect(isComplete(file)).toBe(false);
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ ...old, message_event_types: {}, message_eventid_typeid: 0, replay_userid_typeid: 0 }),
+    );
+    expect(isComplete(file)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -319,6 +319,41 @@ export interface AnalysisResult {
   warnings?: string[];
 }
 
+/** Who a chat line was sent to (`SChatMessage.m_recipient`: 0 / 1 / 4, else `other`). */
+export type ChatRecipient = "all" | "allies" | "observers" | "other";
+
+/** Sender of a chat line, from the lobby user and their details player. */
+export interface ChatPlayer {
+  name: string;
+  /** `name#1234` when found in `replay.server.battlelobby`. */
+  battleTag?: string;
+  /** Canonical hero name (raw when unknown); absent for observers. */
+  hero?: string;
+  /** 0 or 1; absent for observers. */
+  team?: number;
+  observer: boolean;
+}
+
+/** One `SChatMessage` from `replay.message.events`, in stream order. */
+export interface ChatMessage {
+  gameloop: number;
+  /** Seconds from `GatesOpen` (same base as `MatchStat` times); negative before it. */
+  time: number;
+  recipient: ChatRecipient;
+  text: string;
+  /** `null` when the sender's user id isn't in the lobby. */
+  player: ChatPlayer | null;
+}
+
+/** `ReplayAnalyzer.readChat` result: `status` 1 ok, -2 failed (`error`). */
+export interface ChatResult {
+  status: number;
+  messages?: ChatMessage[];
+  error?: string;
+  /** Non-fatal decoding problems; `messages` may be partial when present. */
+  warnings?: string[];
+}
+
 // ── Raw Data Structures ─────────────────────────────────────────────────────
 export interface RawHeader {
   m_version: ReplayVersion;

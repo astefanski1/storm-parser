@@ -45,4 +45,8 @@ export type {
   PlayerUnit,
   RawDetails,
   RawInitData,
+  ChatMessage,
+  ChatPlayer,
+  ChatRecipient,
+  ChatResult,
 } from "./types";

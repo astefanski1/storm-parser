@@ -1,6 +1,10 @@
 import { ReplayParser } from "./ReplayParser.js";
 import type {
   AnalysisResult,
+  ChatMessage,
+  ChatPlayer,
+  ChatRecipient,
+  ChatResult,
   MatchStat,
   PlayerStat,
   ReplayVersion,
@@ -28,6 +32,9 @@ export const AMM_MODES: Record<number, string> = {
   50091: "Storm League",
   50101: "ARAM",
 };
+
+/** `SChatMessage.m_recipient` → recipient (heroprotocol leaves it unnamed). */
+const CHAT_RECIPIENTS: Record<number, ChatRecipient> = { 0: "all", 1: "allies", 4: "observers" };
 
 function bufStr(val: unknown): string {
   if (Buffer.isBuffer(val)) return val.toString("utf8");
@@ -207,6 +214,105 @@ export class ReplayAnalyzer {
         : { status: 1, match, players };
     } catch (error) {
       console.error("ReplayAnalyzer Error:", error);
+      return { status: -2, error: String(error) };
+    }
+  }
+
+  /**
+   * Chat lines (`SChatMessage` only) with their senders. Separate from
+   * `analyze` so chat text never rides along in `AnalysisResult`. Never throws.
+   */
+  static readChat(source: string | Buffer): ChatResult {
+    try {
+      const parser = new ReplayParser(source);
+      parser.init();
+
+      const details = parser.getDetails();
+      if (!details) throw new Error("Missing replay.details from parsed MPQ archive");
+      const lobby = parser.getInitData()?.m_syncLobbyState;
+
+      // Details players by lobby slot (list index on builds without
+      // `m_workingSetSlotId`, as in `analyze`), with BattleTags found the same way.
+      const humans = details.m_playerList
+        .map((p, i) => ({
+          p,
+          slot: typeof p?.m_workingSetSlotId === "number" ? p.m_workingSetSlotId : i,
+        }))
+        .filter(({ p }) => p?.m_toon);
+      const lobbyBuf = parser.extractFile("replay.server.battlelobby");
+      const tags = lobbyBuf
+        ? findBattleTagNumbers(lobbyBuf, humans.map(({ p }) => bufStr(p.m_name)))
+        : [];
+      const bySlot = new Map<number, { hero: string | null; rawHero: string; team: number; tag: number }>();
+      humans.forEach(({ p, slot }, i) => {
+        const rawHero = bufStr(p.m_hero);
+        bySlot.set(slot, {
+          hero: normalizeHeroName(rawHero),
+          rawHero,
+          team: p.m_teamId,
+          tag: tags[i] ?? 0,
+        });
+      });
+
+      const senders = new Map<number, ChatPlayer | null>();
+      const sender = (userId: number | undefined): ChatPlayer | null => {
+        if (userId === undefined) return null;
+        if (senders.has(userId)) return senders.get(userId)!;
+        const user = lobby?.m_userInitialData?.[userId];
+        const slot = lobby?.m_lobbyState?.m_slots?.find((s) => s.m_userId === userId);
+        let player: ChatPlayer | null = null;
+        if (user || slot) {
+          const name = bufStr(user?.m_name);
+          const observer = (slot?.m_observe ?? user?.m_observe ?? 0) !== 0;
+          player = { name, observer };
+          const inGame = observer ? undefined : bySlot.get(slot?.m_workingSetSlotId ?? -1);
+          if (inGame) {
+            // `details.m_hero` is the client's display name; when it isn't recognised (e.g. another
+            // language) the lobby slot's hero id is.
+            player.hero =
+              inGame.hero ?? normalizeHeroName(bufStr(slot?.m_hero)) ?? inGame.rawHero;
+            player.team = inGame.team;
+            if (inGame.tag && name) player.battleTag = `${name}#${inGame.tag}`;
+          }
+        }
+        senders.set(userId, player);
+        return player;
+      };
+
+      // Time base: the GatesOpen loop, as in `analyze` (0 when absent).
+      let gatesOpen = 0;
+      try {
+        for (const ev of parser.iterTrackerEvents()) {
+          if (
+            ev._event === "NNet.Replay.Tracker.SStatGameEvent" &&
+            bufStr(ev.m_eventName) === "GatesOpen"
+          ) {
+            gatesOpen = ev._gameloop;
+            break;
+          }
+        }
+      } catch (error) {
+        parser.warnings.push(
+          `replay.tracker.events: ${String(error)}; chat times count from the replay start`,
+        );
+      }
+
+      const messages: ChatMessage[] = [];
+      for (const ev of parser.getMessageEvents()) {
+        if (ev._event !== "NNet.Game.SChatMessage") continue;
+        messages.push({
+          gameloop: ev._gameloop,
+          time: (ev._gameloop - gatesOpen) / 16,
+          recipient: CHAT_RECIPIENTS[Number(ev.m_recipient)] ?? "other",
+          text: bufStr(ev.m_string),
+          player: sender(ev._userid),
+        });
+      }
+
+      return parser.warnings.length > 0
+        ? { status: 1, messages, warnings: [...parser.warnings] }
+        : { status: 1, messages };
+    } catch (error) {
       return { status: -2, error: String(error) };
     }
   }
