@@ -35,6 +35,22 @@ if (result.status === 1) {
 
 `analyze()` takes a file path. Result: `{ status: 1, match, players, warnings? }` or `{ status: -2, error }`. `warnings` lists non-fatal decoding problems (e.g. an event stream cut short); the result may then be partial.
 
+### Chat
+
+```typescript
+import { ReplayAnalyzer } from "@astefanski/storm-parser";
+
+const chat = ReplayAnalyzer.readChat("path/to/replay.StormReplay"); // path or Buffer; sync, never throws
+if (chat.status === 1) {
+  for (const m of chat.messages!) {
+    // m.time: seconds from the gates opening (negative before it); m.recipient: "all" | "allies" | "observers" | "other"
+    console.log(m.time, m.player?.name, m.player?.hero, m.text);
+  }
+}
+```
+
+`readChat()` returns `{ status: 1, messages, warnings? }` or `{ status: -2, error }`. Each `ChatMessage` has `gameloop`, `time`, `recipient`, `text` and `player` (`{ name, battleTag?, hero?, team?, observer }`, or `null` when the sender isn't in the lobby). Chat is not part of `analyze()`.
+
 ### ReplayParser (raw data)
 
 ```typescript
@@ -47,7 +63,8 @@ parser.init();
 parser.getHeader();        // replay header (version, build)
 parser.getDetails();       // replay.details
 parser.getInitData();      // replay.initData (lobby, slots, game options)
-parser.getTrackerEvents(); // replay.tracker.events
+parser.getTrackerEvents(); // replay.tracker.events (iterTrackerEvents() decodes lazily)
+parser.getMessageEvents(); // replay.message.events (chat, pings, …), each with _userid
 parser.getAttributeEvents(); // replay.attributes.events → { source, mapNamespace, scopes }
 parser.extractFile("replay.server.battlelobby"); // any raw MPQ file
 ```
@@ -56,7 +73,7 @@ parser.extractFile("replay.server.battlelobby"); // any raw MPQ file
 - `loadProtocol(build)`, `getAvailableBuilds()` — protocol access.
 - `normalizeMapName(rawTitle, mapFileName?)` and type `MapName` — canonical map names (`analyze()` already returns canonical names).
 - `BitPackedDecoder`, `VersionedDecoder` — low-level decoders.
-- All result types (`AnalysisResult`, `MatchStat`, `PlayerStat`, `TeamStat`, …).
+- All result types (`AnalysisResult`, `MatchStat`, `PlayerStat`, `TeamStat`, …, `ChatResult`, `ChatMessage`, `ChatPlayer`, `ChatRecipient`).
 
 ## What `analyze()` returns
 

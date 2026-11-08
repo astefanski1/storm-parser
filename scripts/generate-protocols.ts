@@ -4,8 +4,8 @@
  * Runs at development / publish time only (`pnpm generate:protocols`,
  * `prepublishOnly`); the npm package ships the generated `protocols/`, so
  * consumers never run it. Downloads only builds missing from the output
- * folder, checks every HTTP status and parses the Python literals with a
- * strict parser (no eval).
+ * folder (or written without every `FIELDS` entry), checks every HTTP
+ * status and parses the Python literals with a strict parser (no eval).
  *
  * Usage: tsx scripts/generate-protocols.ts [--out <dir>]
  */
@@ -28,7 +28,21 @@ const FIELDS = [
   "replay_header_typeid",
   "game_details_typeid",
   "replay_initdata_typeid",
+  "message_event_types",
+  "message_eventid_typeid",
+  "replay_userid_typeid",
 ] as const;
+
+/** True when `file` exists and holds every field in `FIELDS` (older runs wrote fewer). */
+export function isComplete(file: string): boolean {
+  if (!fs.existsSync(file)) return false;
+  try {
+    const json = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+    return FIELDS.every((f) => f in json);
+  } catch {
+    return false;
+  }
+}
 
 function get(url: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -163,11 +177,9 @@ async function main() {
   const builds = list
     .map((f) => PROTOCOL_FILE.exec(f.name)?.[1])
     .filter((b): b is string => !!b);
-  const missing = builds.filter(
-    (b) => !fs.existsSync(path.join(outDir, `protocol${b}.json`)),
-  );
+  const missing = builds.filter((b) => !isComplete(path.join(outDir, `protocol${b}.json`)));
   console.log(
-    `generate-protocols: ${builds.length} upstream, ${builds.length - missing.length} present, ${missing.length} to fetch → ${outDir}`,
+    `generate-protocols: ${builds.length} upstream, ${builds.length - missing.length} complete, ${missing.length} to fetch → ${outDir}`,
   );
 
   const BATCH = 10;
