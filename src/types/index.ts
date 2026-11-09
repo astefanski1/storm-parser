@@ -334,7 +334,11 @@ export interface ChatPlayer {
   observer: boolean;
 }
 
-/** One `SChatMessage` from `replay.message.events`, in stream order. */
+/**
+ * One chat line, by game loop. Every player's lines come from `replay.game.events` trigger chat; `recipient` comes
+ * from the matching `replay.message.events` `SChatMessage` (what the recording player saw). Lines the recording
+ * player never saw are the other team's team chat (`allies`) or observer chat (`observers`).
+ */
 export interface ChatMessage {
   gameloop: number;
   /** Seconds from `GatesOpen` (same base as `MatchStat` times); negative before it. */
@@ -345,10 +349,24 @@ export interface ChatMessage {
   player: ChatPlayer | null;
 }
 
+/** Match facts shown next to the chat (same sources as `analyze`). */
+export interface ChatGame {
+  /** Canonical map name (`normalizeMapName`; raw title when unknown). */
+  map: string;
+  /** ISO time the game started (`details.m_timeUTC`). */
+  date: string;
+  /** Seconds from `GatesOpen` to the last tracker event (`MatchStat.length`). */
+  duration: number;
+  /** Every details player in list order (AI included, without BattleTag), then each observer who chatted; in-game senders are the same objects. */
+  players: ChatPlayer[];
+}
+
 /** `ReplayAnalyzer.readChat` result: `status` 1 ok, -2 failed (`error`). */
 export interface ChatResult {
   status: number;
   messages?: ChatMessage[];
+  /** Absent when the details can't give them (warning); the chat is still returned. */
+  game?: ChatGame;
   error?: string;
   /** Non-fatal decoding problems; `messages` may be partial when present. */
   warnings?: string[];

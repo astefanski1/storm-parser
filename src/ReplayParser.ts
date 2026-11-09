@@ -22,6 +22,9 @@ export interface Protocol {
   message_event_types?: Record<number, [number, string]>;
   message_eventid_typeid?: number;
   replay_userid_typeid?: number;
+  /** Game stream fields; absent in protocol JSON generated before they were added. */
+  game_event_types?: Record<number, [number, string]>;
+  game_eventid_typeid?: number;
 }
 
 type EventDecoder = Pick<VersionedDecoder, "instance" | "done" | "used_bits" | "byte_align">;
@@ -239,6 +242,28 @@ export class ReplayParser {
       this.warnings.push(`replay.message.events: ${String(error)}; rest of the stream skipped`);
     }
     return events;
+  }
+
+  /**
+   * `replay.game.events` (every player's commands, camera, trigger chat, …), decoded lazily, each
+   * with `_userid`. Yields nothing when the file or the protocol's game fields are missing. A decode
+   * error propagates after the events already yielded (the caller decides whether that is fatal).
+   */
+  public *iterGameEvents(): IterableIterator<ReplayEvent> {
+    if (!this.protocol) throw new Error("Protocol not loaded");
+    const { game_event_types, game_eventid_typeid, replay_userid_typeid } = this.protocol;
+    if (!game_event_types || game_eventid_typeid === undefined || replay_userid_typeid === undefined) {
+      return;
+    }
+    const buf = this.mpq.readFile("replay.game.events");
+    if (!buf) return;
+    yield* this.decodeEventStream(
+      new BitPackedDecoder(buf, this.protocol.typeinfos),
+      game_eventid_typeid,
+      game_event_types,
+      "replay.game.events",
+      replay_userid_typeid,
+    );
   }
 
   /**

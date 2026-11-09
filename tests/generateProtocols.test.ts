@@ -46,6 +46,10 @@ describe("protocol generator: strict Python literal parser", () => {
       "}",
       "message_eventid_typeid = 3",
       "replay_userid_typeid = 9",
+      "game_event_types = {",
+      "    32: (111, 'NNet.Game.STriggerChatMessageEvent'),",
+      "}",
+      "game_eventid_typeid = 0",
     ].join("\n");
     expect(extractVariable(code, "svaruint32_typeid")).toBe(7);
     expect(protocolFromPython(12345, code)).toEqual({
@@ -60,6 +64,8 @@ describe("protocol generator: strict Python literal parser", () => {
       message_event_types: { "0": [100, "NNet.Game.SChatMessage"] },
       message_eventid_typeid: 3,
       replay_userid_typeid: 9,
+      game_event_types: { "32": [111, "NNet.Game.STriggerChatMessageEvent"] },
+      game_eventid_typeid: 0,
     });
     expect(() => extractVariable(code, "missing")).toThrow(/not found/);
   });
@@ -83,10 +89,10 @@ describe("protocol generator: completeness check", () => {
     };
     fs.writeFileSync(file, JSON.stringify(old));
     expect(isComplete(file)).toBe(false);
-    fs.writeFileSync(
-      file,
-      JSON.stringify({ ...old, message_event_types: {}, message_eventid_typeid: 0, replay_userid_typeid: 0 }),
-    );
+    const withMessages = { ...old, message_event_types: {}, message_eventid_typeid: 0, replay_userid_typeid: 0 };
+    fs.writeFileSync(file, JSON.stringify(withMessages));
+    expect(isComplete(file)).toBe(false);
+    fs.writeFileSync(file, JSON.stringify({ ...withMessages, game_event_types: {}, game_eventid_typeid: 0 }));
     expect(isComplete(file)).toBe(true);
     fs.rmSync(dir, { recursive: true, force: true });
   });

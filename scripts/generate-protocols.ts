@@ -31,6 +31,8 @@ const FIELDS = [
   "message_event_types",
   "message_eventid_typeid",
   "replay_userid_typeid",
+  "game_event_types",
+  "game_eventid_typeid",
 ] as const;
 
 /** True when `file` exists and holds every field in `FIELDS` (older runs wrote fewer). */

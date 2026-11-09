@@ -46,6 +46,7 @@ export type {
   RawDetails,
   RawInitData,
   ChatMessage,
+  ChatGame,
   ChatPlayer,
   ChatRecipient,
   ChatResult,
