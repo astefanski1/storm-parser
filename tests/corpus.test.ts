@@ -1,6 +1,7 @@
 import fs from "fs";
 import { describe, it, expect, beforeAll } from "vitest";
 import { ReplayAnalyzer } from "../src/ReplayAnalyzer";
+import { ReplayParser } from "../src/ReplayParser";
 import type { AnalysisResult } from "../src/types/index";
 import {
   analyzeReplay,
@@ -200,5 +201,38 @@ describe.skipIf(replayFiles.length === 0)("replay corpus oracles", () => {
     }
     expect(lines).toBeGreaterThan(0);
     expect(named).toBe(lines);
-  });
+  }, 300_000);
+
+  it("chat keeps every line the recording player saw and matches analyze's game facts", () => {
+    for (const { file, r } of results) {
+      const chat = ReplayAnalyzer.readChat(file);
+      const parser = new ReplayParser(file);
+      parser.init();
+      const seen = parser.getMessageEvents().filter((e) => e._event === "NNet.Game.SChatMessage");
+      // Each seen line survives (same loop and sender); trigger-only lines are extra.
+      const out = new Set(chat.messages!.map((m) => m.gameloop));
+      for (const e of seen) expect(out.has(e._gameloop), `${file} @${e._gameloop}`).toBe(true);
+      expect(chat.messages!.length, file).toBeGreaterThanOrEqual(seen.length);
+      // Every all / team / observer line pairs with its trigger line: no line appears twice. Recipient 2 (`other`,
+      // one direct line in the corpus) has no trigger line and stays on its own.
+      const triggers = [...parser.iterGameEvents()].filter((e) => e._event === "NNet.Game.STriggerChatMessageEvent");
+      const direct = seen.filter((e) => ![0, 1, 4].includes(Number(e.m_recipient))).length;
+      if (triggers.length > 0 && !chat.warnings) expect(chat.messages!.length, file).toBe(triggers.length + direct);
+      // The roster carries the same heroes as `analyze` (slot fallback included).
+      if (r.status === 1) {
+        const heroes = Object.values(r.players!).map((p) => `${p.name}|${p.hero}`).sort();
+        const roster = chat.game!.players.filter((p) => !p.observer).map((p) => `${p.name}|${p.hero}`).sort();
+        expect(roster, file).toEqual(heroes);
+      }
+      // eslint-disable-next-line no-control-regex
+      for (const m of chat.messages!) expect(m.text, file).not.toMatch(/[\x0E\x0F]/);
+      if (r.status !== 1) continue;
+      const game = chat.game!;
+      expect(game.map, file).toBe(r.match!.map);
+      expect(game.duration, file).toBeCloseTo(r.match!.length, 3);
+      expect(game.date, file).toBe(r.match!.date);
+      const inGame = game.players.filter((p) => !p.observer);
+      expect(inGame.length, file).toBe(r.match!.playerIDs.length);
+    }
+  }, 300_000);
 });

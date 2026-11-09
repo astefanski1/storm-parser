@@ -1,6 +1,7 @@
 import { ReplayParser } from "./ReplayParser.js";
 import type {
   AnalysisResult,
+  ChatGame,
   ChatMessage,
   ChatPlayer,
   ChatRecipient,
@@ -19,6 +20,8 @@ import {
 import { computeAnalytics } from "./analyzers/analyticsComputer.js";
 import { normalizeHeroName } from "./analyzers/heroesList.js";
 import { findBattleTagNumbers } from "./analyzers/battleTags.js";
+import { lobbySlotIndexes, mergeChat, type SeenLine, type TriggerLine } from "./analyzers/chat.js";
+import { normalizeMapName } from "./analyzers/mapsList.js";
 
 /** Matchmaking queue (`m_gameOptions.m_ammId`) → game mode. */
 export const AMM_MODES: Record<number, string> = {
@@ -231,27 +234,36 @@ export class ReplayAnalyzer {
       if (!details) throw new Error("Missing replay.details from parsed MPQ archive");
       const lobby = parser.getInitData()?.m_syncLobbyState;
 
-      // Details players by lobby slot (list index on builds without
-      // `m_workingSetSlotId`, as in `analyze`), with BattleTags found the same way.
-      const humans = details.m_playerList
-        .map((p, i) => ({
-          p,
-          slot: typeof p?.m_workingSetSlotId === "number" ? p.m_workingSetSlotId : i,
-        }))
-        .filter(({ p }) => p?.m_toon);
+      // Details players with a toon (AI included), with BattleTags found as in `analyze`.
+      const humans = details.m_playerList.filter((p) => p?.m_toon);
       const lobbyBuf = parser.extractFile("replay.server.battlelobby");
       const tags = lobbyBuf
-        ? findBattleTagNumbers(lobbyBuf, humans.map(({ p }) => bufStr(p.m_name)))
+        ? findBattleTagNumbers(lobbyBuf, humans.map((p) => bufStr(p.m_name)))
         : [];
-      const bySlot = new Map<number, { hero: string | null; rawHero: string; team: number; tag: number }>();
-      humans.forEach(({ p, slot }, i) => {
+
+      // Lobby slot of each of them: by `m_workingSetSlotId`, or on builds without it by walking the
+      // slots in order and skipping slots without a hero (observers, empty), as `analyze` does.
+      const lobbySlots = lobby?.m_lobbyState?.m_slots ?? [];
+      const slotIndexOf = lobbySlotIndexes(
+        humans,
+        lobbySlots.map((s) => ({ workingSetSlotId: s.m_workingSetSlotId, hasHero: bufStr(s.m_hero) !== "" })),
+      );
+
+      // One player per details player, shared by the roster and its sender (same name, hero, team, tag).
+      const bySlotIndex = new Map<number, ChatPlayer>();
+      const roster: ChatPlayer[] = humans.map((p, i) => {
+        const name = bufStr(p.m_name);
         const rawHero = bufStr(p.m_hero);
-        bySlot.set(slot, {
-          hero: normalizeHeroName(rawHero),
-          rawHero,
-          team: p.m_teamId,
-          tag: tags[i] ?? 0,
-        });
+        const player: ChatPlayer = { name, observer: false, team: p.m_teamId };
+        // `details.m_hero` is the client's display name; when it isn't recognised (e.g. another
+        // language) the lobby slot's hero id is.
+        player.hero =
+          normalizeHeroName(rawHero) ??
+          normalizeHeroName(bufStr(lobbySlots[slotIndexOf[i]]?.m_hero)) ??
+          rawHero;
+        if (tags[i] && name) player.battleTag = `${name}#${tags[i]}`;
+        if (slotIndexOf[i] >= 0) bySlotIndex.set(slotIndexOf[i], player);
+        return player;
       });
 
       const senders = new Map<number, ChatPlayer | null>();
@@ -259,59 +271,96 @@ export class ReplayAnalyzer {
         if (userId === undefined) return null;
         if (senders.has(userId)) return senders.get(userId)!;
         const user = lobby?.m_userInitialData?.[userId];
-        const slot = lobby?.m_lobbyState?.m_slots?.find((s) => s.m_userId === userId);
+        const index = lobbySlots.findIndex((s) => s.m_userId === userId);
+        const slot = lobbySlots[index];
         let player: ChatPlayer | null = null;
         if (user || slot) {
           const name = bufStr(user?.m_name);
           const observer = (slot?.m_observe ?? user?.m_observe ?? 0) !== 0;
-          player = { name, observer };
-          const inGame = observer ? undefined : bySlot.get(slot?.m_workingSetSlotId ?? -1);
-          if (inGame) {
-            // `details.m_hero` is the client's display name; when it isn't recognised (e.g. another
-            // language) the lobby slot's hero id is.
-            player.hero =
-              inGame.hero ?? normalizeHeroName(bufStr(slot?.m_hero)) ?? inGame.rawHero;
-            player.team = inGame.team;
-            if (inGame.tag && name) player.battleTag = `${name}#${inGame.tag}`;
-          }
+          const inGame = observer ? undefined : bySlotIndex.get(index);
+          // Reused only when the lobby name agrees, so a slot mismatch can't lend another player's identity.
+          player = inGame && (!name || inGame.name === name) ? inGame : { name, observer };
         }
         senders.set(userId, player);
         return player;
       };
 
-      // Time base: the GatesOpen loop, as in `analyze` (0 when absent).
+      // Time base, map and length as in `analyze`: GatesOpen loop (0 when absent), the
+      // `EndOfGameTalentChoices` map id, and the last tracker loop.
       let gatesOpen = 0;
+      let lastLoop = 0;
+      let mapId: string | undefined;
       try {
         for (const ev of parser.iterTrackerEvents()) {
-          if (
-            ev._event === "NNet.Replay.Tracker.SStatGameEvent" &&
-            bufStr(ev.m_eventName) === "GatesOpen"
-          ) {
-            gatesOpen = ev._gameloop;
-            break;
+          lastLoop = Math.max(lastLoop, ev._gameloop);
+          if (ev._event !== "NNet.Replay.Tracker.SStatGameEvent") continue;
+          const name = bufStr(ev.m_eventName);
+          if (name === "GatesOpen") gatesOpen = ev._gameloop;
+          else if (name === "EndOfGameTalentChoices" && !mapId) {
+            const strings = (ev.m_stringData ?? []) as { m_key: unknown; m_value: unknown }[];
+            const map = strings.find((d) => bufStr(d.m_key) === "Map");
+            if (map) mapId = bufStr(map.m_value) || undefined;
           }
         }
       } catch (error) {
+        parser.warnings.push(`replay.tracker.events: ${String(error)}; chat times and length may be off`);
+      }
+
+      const seen: SeenLine[] = [];
+      for (const ev of parser.getMessageEvents()) {
+        if (ev._event !== "NNet.Game.SChatMessage") continue;
+        seen.push({
+          gameloop: ev._gameloop,
+          userId: ev._userid,
+          recipient: CHAT_RECIPIENTS[Number(ev.m_recipient)] ?? "other",
+          text: bufStr(ev.m_string),
+        });
+      }
+      // Every player's lines (the message stream holds only what the recording player saw).
+      const triggers: TriggerLine[] = [];
+      try {
+        for (const ev of parser.iterGameEvents()) {
+          if (ev._event !== "NNet.Game.STriggerChatMessageEvent") continue;
+          triggers.push({ gameloop: ev._gameloop, userId: ev._userid, text: bufStr(ev.m_chatMessage) });
+        }
+      } catch (error) {
         parser.warnings.push(
-          `replay.tracker.events: ${String(error)}; chat times count from the replay start`,
+          `replay.game.events: ${String(error)}; later chat only from replay.message.events`,
         );
       }
 
-      const messages: ChatMessage[] = [];
-      for (const ev of parser.getMessageEvents()) {
-        if (ev._event !== "NNet.Game.SChatMessage") continue;
-        messages.push({
-          gameloop: ev._gameloop,
-          time: (ev._gameloop - gatesOpen) / 16,
-          recipient: CHAT_RECIPIENTS[Number(ev.m_recipient)] ?? "other",
-          text: bufStr(ev.m_string),
-          player: sender(ev._userid),
-        });
+      const messages: ChatMessage[] = mergeChat(
+        seen,
+        triggers,
+        (id) => sender(id)?.observer ?? false,
+      ).map((l) => ({
+        gameloop: l.gameloop,
+        time: (l.gameloop - gatesOpen) / 16,
+        recipient: l.recipient,
+        text: l.text,
+        player: sender(l.userId),
+      }));
+
+      // Roster: every details player (AI included, no BattleTag), then observers who chatted.
+      const players = [...roster];
+      for (const m of messages) if (m.player?.observer && !players.includes(m.player)) players.push(m.player);
+
+      // Match facts are extras: a bad field never costs the chat.
+      let game: ChatGame | undefined;
+      try {
+        game = {
+          map: normalizeMapName(bufStr(details.m_title), mapId),
+          date: this.fileTimeToDate(details.m_timeUTC).toISOString(),
+          duration: Math.max(0, (lastLoop - gatesOpen) / 16),
+          players,
+        };
+      } catch (error) {
+        parser.warnings.push(`replay.details: ${String(error)}; no game facts`);
       }
 
       return parser.warnings.length > 0
-        ? { status: 1, messages, warnings: [...parser.warnings] }
-        : { status: 1, messages };
+        ? { status: 1, messages, game, warnings: [...parser.warnings] }
+        : { status: 1, messages, game };
     } catch (error) {
       return { status: -2, error: String(error) };
     }
