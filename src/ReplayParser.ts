@@ -4,7 +4,8 @@ import {
   VersionedDecoder,
 } from "./decoders/BitPackedDecoder";
 import { BitPackedBuffer } from "./decoders/BitPackedBuffer";
-import { loadProtocol, getAvailableBuilds } from "./protocols/map.js";
+import { loadProtocol } from "./protocols/map.js";
+import { eventLoop, resolveProtocol, type EventDecoder } from "./streams";
 import type { RawDetails, RawHeader, RawInitData } from "./types/index.js";
 
 export type TypeInfo = [string, number[]?];
@@ -27,8 +28,6 @@ export interface Protocol {
   game_eventid_typeid?: number;
 }
 
-type EventDecoder = Pick<VersionedDecoder, "instance" | "done" | "used_bits" | "byte_align">;
-
 /** One attribute of `replay.attributes.events` (value: bytes as text). */
 export interface AttributeValue {
   namespace: number;
@@ -48,7 +47,7 @@ export interface ReplayEvent {
   _eventid: number;
   _gameloop: number;
   _bits: number;
-  /** Sender lobby user id; only on streams decoded with a user id (messages). */
+  /** Sender lobby user id; only on streams decoded with a user id (game, message). */
   _userid?: number;
   [key: string]: unknown;
 }
@@ -96,26 +95,10 @@ export class ReplayParser {
   }
 
   protected loadProtocolForBuild(build: number): Protocol {
-    let protocol = loadProtocol(build);
-    if (!protocol) {
-      // Closest available build that is <= the requested build. A replay
-      // older than every protocol can't be decoded with any of them.
-      const builds = getAvailableBuilds();
-      const older = builds.filter((v) => v <= build);
-      if (older.length === 0) {
-        throw new Error(
-          `Replay build ${build} is older than every protocol (oldest ${builds[0]})`,
-        );
-      }
-      protocol = loadProtocol(older[older.length - 1]);
-    }
-    if (!protocol) {
-      throw new Error(`No protocol found for build ${build}`);
-    }
-    return protocol;
+    return resolveProtocol(build);
   }
 
-  protected *decodeEventStream(
+  protected decodeEventStream(
     decoder: EventDecoder,
     eventidTypeid: number,
     eventTypes: Record<number, [number, string]>,
@@ -123,51 +106,9 @@ export class ReplayParser {
     userIdTypeid?: number,
   ): IterableIterator<ReplayEvent> {
     if (!this.protocol) throw new Error("Protocol not loaded");
-    let gameloop = 0;
-
-    while (!decoder.done()) {
-      const startBits = decoder.used_bits();
-
-      const deltaInstance = decoder.instance(
-        this.protocol.svaruint32_typeid,
-      ) as Record<string, number>;
-      const deltaKey = Object.keys(deltaInstance)[0];
-      const delta = deltaInstance[deltaKey];
-      gameloop += delta;
-
-      // heroprotocol `_decode_event_stream` order: delta, user id, event id.
-      let userid: number | undefined;
-      if (userIdTypeid !== undefined) {
-        const raw = decoder.instance(userIdTypeid) as { m_userId?: number } | number;
-        userid = Number(typeof raw === "object" && raw !== null ? raw.m_userId : raw);
-      }
-
-      const eventid = Number(decoder.instance(eventidTypeid));
-
-      const eventType = eventTypes[eventid];
-      if (!eventType) {
-        // The event's size is unknown, so nothing after it can be decoded.
-        // Keep what was decoded and say where the stream was cut.
-        this.warnings.push(
-          `${streamName}: unknown eventid(${eventid}) at gameloop ${gameloop}; rest of the stream skipped`,
-        );
-        return;
-      }
-
-      const typeid = eventType[0];
-      const typename = eventType[1];
-
-      const event = decoder.instance(typeid) as ReplayEvent;
-      event._event = typename;
-      event._eventid = eventid;
-      event._gameloop = gameloop;
-      if (userid !== undefined) event._userid = userid;
-
-      decoder.byte_align();
-      event._bits = decoder.used_bits() - startBits;
-
-      yield event;
-    }
+    return eventLoop(decoder, this.protocol, eventidTypeid, eventTypes, streamName, userIdTypeid, 0, (warning) =>
+      this.warnings.push(warning),
+    );
   }
 
   public getDetails(): RawDetails | null {
