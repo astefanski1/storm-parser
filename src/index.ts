@@ -11,6 +11,8 @@ export {
   BitPackedDecoder,
 } from "./decoders/BitPackedDecoder";
 export { loadProtocol, getAvailableBuilds } from "./protocols/map";
+export { decodeStream, resolveProtocol } from "./streams";
+export type { StreamKind, StreamChunk } from "./streams";
 export { normalizeMapName } from "./analyzers/mapsList";
 export type { MapName } from "./analyzers/mapsList";
 export type {

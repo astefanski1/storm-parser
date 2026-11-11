@@ -70,8 +70,23 @@ parser.getAttributeEvents(); // replay.attributes.events → { source, mapNamesp
 parser.extractFile("replay.server.battlelobby"); // any raw MPQ file
 ```
 
+### Raw event streams (no MPQ archive)
+Decode one stream file from a buffer, e.g. the files the game writes while a match is running (`%TEMP%/Heroes of the Storm/TempWriteReplayP1/`). Pass the returned position back to read a growing file incrementally; a buffer cut inside an event returns the complete events before it.
+
+```typescript
+import { decodeStream, resolveProtocol } from "@astefanski/storm-parser";
+
+const protocol = resolveProtocol(build); // the build's protocol, else the closest older one
+let at = { fromByte: 0, gameloop: 0 };
+const chunk = decodeStream(protocol, "tracker", buffer, at); // "tracker" | "game" | "message"
+chunk.events;    // complete events (game / message events carry _userid)
+chunk.truncated; // true when the buffer ended inside an event
+chunk.warning;   // set when the stream can't be decoded further (events before that point are kept)
+at = { fromByte: chunk.nextByte, gameloop: chunk.gameloop }; // continue here once the file grew
+```
+
 ### Other exports
-- `loadProtocol(build)`, `getAvailableBuilds()` — protocol access.
+- `loadProtocol(build)`, `getAvailableBuilds()`, `resolveProtocol(build)` — protocol access.
 - `normalizeMapName(rawTitle, mapFileName?)` and type `MapName` — canonical map names (`analyze()` already returns canonical names).
 - `BitPackedDecoder`, `VersionedDecoder` — low-level decoders.
 - All result types (`AnalysisResult`, `MatchStat`, `PlayerStat`, `TeamStat`, …, `ChatResult`, `ChatMessage`, `ChatGame`, `ChatPlayer`, `ChatRecipient`).
